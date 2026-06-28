@@ -277,4 +277,10 @@ python3 -u test_models.py --only glm-5.2:cloud  # just one
 
 ## TODO / later polish
 
-- Suppress the per-molecule dockstring `DockstringWarning` to clean up `run.log`.
+- Suppress the per-molecule dockstring `DockstringWarning` (Mac-vs-Linux) that
+  floods `run.log` — add
+  `warnings.filterwarnings('ignore', category=DockstringWarning)` near the
+  RDKit suppress in `molopt.py` (or `docking_module.py`).
+- A few `SMILES Parse Error` lines still leak to stderr per run (oddt-internal
+  parse edge; `RDLogger.DisableLog('rdApp.*')` already catches most). Low volume
+  (~1-3 per ~hundreds of parses), not worth fixing now but noted here.
