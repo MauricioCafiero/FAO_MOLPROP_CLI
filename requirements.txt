@@ -1,0 +1,9 @@
+pyscf 
+rdkit 
+pubchempy 
+openbabel-wheel 
+dockstring 
+ollama 
+anthropic
+openai
+

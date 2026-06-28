@@ -1,0 +1,22 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- Virtualenv ---
+fao-env/
+venv/
+.venv/
+
+# --- Secrets ---
+.env
+
+# --- Run artifacts (regenerated each run) ---
+*.log
+test_mol.sdf
+
+# --- Editor / OS ---
+.DS_Store
+.idea/
+.vscode/
