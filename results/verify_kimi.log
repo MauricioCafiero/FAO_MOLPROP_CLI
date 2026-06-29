@@ -1,0 +1,38 @@
+/Users/cafierom/Library/CloudStorage/OneDrive-UniversityofReading/Research-Reading/Python/python_bootcamp/FragGrow/FAO_MOLPROP_CLI/fao-env/lib/python3.14/site-packages/dockstring/utils.py:76: DockstringWarning: Although Mac use is supported, docking scores on Mac do not always perfectly match scores from Linux. Therefore, extra care should be taken when comparing results to other platforms. In particular, the baselines in the DOCKSTRING paper were computed on Linux, so please do not directly compare your docking scores to the scores reported on the paper.
+  warnings.warn(
+reading NP model ...
+model in
+/Users/cafierom/Library/CloudStorage/OneDrive-UniversityofReading/Research-Reading/Python/python_bootcamp/FragGrow/FAO_MOLPROP_CLI/fao-env/lib/python3.14/site-packages/dockstring/utils.py:76: DockstringWarning: Although Mac use is supported, docking scores on Mac do not always perfectly match scores from Linux. Therefore, extra care should be taken when comparing results to other platforms. In particular, the baselines in the DOCKSTRING paper were computed on Linux, so please do not directly compare your docking scores to the scores reported on the paper.
+  warnings.warn(
+reading NP model ...
+model in
+/Users/cafierom/Library/CloudStorage/OneDrive-UniversityofReading/Research-Reading/Python/python_bootcamp/FragGrow/FAO_MOLPROP_CLI/fao-env/lib/python3.14/site-packages/dockstring/utils.py:76: DockstringWarning: Although Mac use is supported, docking scores on Mac do not always perfectly match scores from Linux. Therefore, extra care should be taken when comparing results to other platforms. In particular, the baselines in the DOCKSTRING paper were computed on Linux, so please do not directly compare your docking scores to the scores reported on the paper.
+  warnings.warn(
+reading NP model ...
+model in
+/Users/cafierom/Library/CloudStorage/OneDrive-UniversityofReading/Research-Reading/Python/python_bootcamp/FragGrow/FAO_MOLPROP_CLI/fao-env/lib/python3.14/site-packages/dockstring/utils.py:76: DockstringWarning: Although Mac use is supported, docking scores on Mac do not always perfectly match scores from Linux. Therefore, extra care should be taken when comparing results to other platforms. In particular, the baselines in the DOCKSTRING paper were computed on Linux, so please do not directly compare your docking scores to the scores reported on the paper.
+  warnings.warn(
+reading NP model ...
+model in
+/Users/cafierom/Library/CloudStorage/OneDrive-UniversityofReading/Research-Reading/Python/python_bootcamp/FragGrow/FAO_MOLPROP_CLI/fao-env/lib/python3.14/site-packages/dockstring/utils.py:76: DockstringWarning: Although Mac use is supported, docking scores on Mac do not always perfectly match scores from Linux. Therefore, extra care should be taken when comparing results to other platforms. In particular, the baselines in the DOCKSTRING paper were computed on Linux, so please do not directly compare your docking scores to the scores reported on the paper.
+  warnings.warn(
+reading NP model ...
+model in
+Run:       kimi-k2.7-code_HMGCR_2026-06-29_12-18-58.md
+Model:      kimi-k2.7-code
+Protein:    HMGCR  (docking target)
+Last model-response block: 3430 chars
+Extracted 5 valid SMILES (min heavy atoms = 5)
+
+Verifying 5 molecules against HMGCR ...
+----------------------------------------------------------------------------------------
+canonical SMILES                                      dock   QED  aLogP   SAS     NP  status
+----------------------------------------------------------------------------------------
+O=c1cc(-c2ccc3ccccc3c2)oc2cccc(CS(=O)(=O)[O-])c12    -9.40 0.517   3.66  2.63   0.15  inserted
+O=C([O-])Cc1cccc2oc(-c3ccc4ccccc4c3)cc(=O)c12        -9.30 0.579   2.91  2.57   0.29  inserted
+O=C([O-])Cc1cc(O)cc2oc(-c3ccc(F)cc3F)cc(=O)c12       -9.00 0.789   1.74  2.92   0.39  inserted
+O=C([O-])Cc1cccc2oc(-c3ccc(F)cc3F)cc(=O)c12          -8.90 0.741   2.03  2.73  -0.27  inserted
+O=C([O-])Cc1cccc2oc(-c3ccc(F)cc3)cc(=O)c12           -8.80 0.740   1.89  2.59  -0.02  inserted
+----------------------------------------------------------------------------------------
+
+Done. inserted=5  skipped(already in DB)=0  failed=0  -> molecules.sqlite

@@ -57,6 +57,7 @@ repo root. Docking is the runtime bottleneck, not the LLM.
 ```
 molopt.py                     # the CLI (entrypoint)
 test_models.py                # smoke-test candidate Ollama cloud models
+verify_results.py             # verify a run's final molecules and store them in sqlite
 Ollama_MolOpt.ipynb           # original notebook (reference, not deleted)
 new_models_to_add.txt         # candidate cloud model names (with -cloud suffix)
 .env.example                  # copy to .env and fill in API keys
@@ -70,6 +71,7 @@ code/
   docking_module.py           # dockstring docking + SAS/NP scoring
 HMGCR_dude_receptor_2.pdb      # the receptor actually used by the code (hardcoded in docking_module.py)
 HMGCR_dude_receptor.pdb        # older copy, kept as a backup; not referenced by the code
+molecules.sqlite               # accumulated verified molecules + recomputed metrics (created on first run)
 results/                       # timestamped session reports (.md) + JSON message sidecars (.json)
 ```
 
@@ -224,6 +226,87 @@ nitrogen adds H-bond acceptors and polar surface area, improving *both* binding
 Results for this run: `results/glm-5.2_HMGCR_2026-06-28_12-44-57.md`
 (+ `.json` messages sidecar — see [Resuming a run](#resuming-a-run)).
 
+### Example: DeepSeek-v4-pro + Claude adversary optimizing HMGCR
+
+```bash
+python3 -u molopt.py --protein HMGCR --model deepseek-v4-pro \
+  --adversary anthropic --adversary-model claude-haiku-4-5-20251001 \
+  --max-turns 2 --max-tool-calls 3
+```
+
+This run was **started fresh, killed during Turn 1, then resumed** from its JSON
+sidecar (`--resume results/deepseek-v4-pro_HMGCR_2026-06-29_10-29-38.json`). The
+resume completed Turn 1 and Turn 2, ending with `MAX_TURNS_REACHED` and a full
+final summary.
+
+| Phase | What happened |
+|-------|---------------|
+| Initial turn | Model explores flavone scaffolds and finds a **−9.0** nitrovinyl + carboxylate lead, but with QED 0.514 and **2 undesirable moieties** |
+| Adversary 1 | Flags steric/charge risks and warns that estimated scores are untested; pushes for neutral analogs, better drug-likeness, and validation |
+| Turn 1 | Model empirically checks Lipinski/SAS/NP and tests third substituents; discovers **C(=O)N at position 8** improves the lead to **−9.3** |
+| Adversary 2 | Confirms position 8 is optimal but re-raises the binding-site concern and nitrovinyl liability; asks for Rosuvastatin comparison |
+| Turn 2 | Model docks Rosuvastatin, confirms the molecules hit a **different (likely allosteric) pocket**, and finalizes 5 candidates |
+
+Best molecules (verification values from `verify_results.py`):
+
+| # | SMILES | Score | QED | LogP | SAS | NP |
+|---|-------|:---:|:---:|:---:|:---:|:---:|
+| 1 (CF₃ + COO⁻ + C(=O)N @pos8) | `NC(=O)c1cccc2oc(-c3cccc(CC(=O)[O-])c3C(F)(F)F)cc(=O)c12` | **−9.10** | 0.731 | 1.87 | 3.03 | −0.00 |
+| 2 (CF₃ + COO⁻ + C(=O)N @pos5) | `NC(=O)c1cccc2c(=O)cc(-c3cccc(CC(=O)[O-])c3C(F)(F)F)oc12` | −9.00 | 0.731 | 1.87 | 3.01 | −0.12 |
+| 3 (SO₂NH₂ + COO⁻) | `NS(=O)(=O)c1c(CC(=O)[O-])cccc1-c1cc(=O)c2ccccc2o1` | −8.90 | 0.718 | 0.40 | 2.84 | −0.28 |
+| 5 (NO₂vinyl + COO⁻ + C(=O)N @pos8) | `NC(=O)c1cccc2oc(-c3cccc(CC(=O)[O-])c3C=C[N+](=O)[O-])cc(=O)c12` | **−9.30** | 0.485 | 1.10 | 3.25 | 0.21 |
+
+Molecule **#1** is the standout: potent (−9.1), drug-like (QED 0.731, 0 undesirable moieties, SAS 3.03), and synthetically accessible. Molecule #5 is the most potent overall (−9.3) but carries the nitrovinyl liability.
+
+The key SAR: keep the **ortho CF₃ + carboxylate** on the pendant phenyl and add a
+**carboxamide at position 8** of the flavone core for an extra H-bond to MET640.
+Position 3 is sterically disfavoured. The binding pocket overlaps with
+Rosuvastatin only at **ASN639**, suggesting an allosteric site rather than the
+orthosteric HMGCR active site.
+
+Result files:
+- Original run: `results/deepseek-v4-pro_HMGCR_2026-06-29_10-29-38.md`
+- Resumed run: `results/deepseek-v4-pro_HMGCR_2026-06-29_11-44-49.md`
+
+### Example: Kimi-k2.7-code + Claude adversary optimizing HMGCR
+
+```bash
+python3 -u molopt.py --protein HMGCR --model kimi-k2.7-code \
+  --adversary anthropic --adversary-model claude-haiku-4-5-20251001 \
+  --max-turns 2 --max-tool-calls 3
+```
+
+This run completed two full adversary↔main cycles, ending with
+`MAX_TURNS_REACHED` and a full final summary.
+
+| Phase | What happened |
+|-------|---------------|
+| Initial turn | Model starts from the provided flavone leads and finds **−9.0** with a 6-hydroxy-2,4-difluorophenyl flavone carboxylate; proposes 5 candidates |
+| Adversary 1 | Challenges whether the −9.0 estimate is real, asks for Lipinski/QED/SAS validation, suggests positional isomers and alternative charged anchors |
+| Turn 1 | Model validates: the −9.0 is real; discovers 2,4-diF-phenyl is optimal among fluorophenyls; rules out 6-OMe (−7.7) and alternative carboxylate positions (−8.2/−8.4) |
+| Adversary 2 | Pushes for larger aryl groups (naphthyl/biphenyl), sulfonate/phosphonate anchors, and final drug-likeness assessment |
+| Turn 2 | Model finds a **2-naphthyl** scaffold is superior; the 2-naphthyl sulfonate reaches **−9.4**, while the 2-naphthyl carboxylate is close behind at **−9.3** |
+
+Best molecules (verification values from `verify_results.py`):
+
+| # | SMILES | Score | QED | LogP | SAS | NP |
+|---|-------|:---:|:---:|:---:|:---:|:---:|
+| 1 (2-naphthyl sulfonate) | `O=c1cc(-c2ccc3ccccc3c2)oc2cccc(CS(=O)(=O)[O-])c12` | **−9.40** | 0.517 | 3.66 | 2.63 | 0.15 |
+| 2 (2-naphthyl carboxylate) | `O=C([O-])Cc1cccc2oc(-c3ccc4ccccc4c3)cc(=O)c12` | −9.30 | 0.579 | 2.91 | 2.57 | 0.29 |
+| 3 (2,4-diF-phenyl + 6-OH) | `O=C([O-])Cc1cc(O)cc2oc(-c3ccc(F)cc3F)cc(=O)c12` | −9.00 | **0.789** | 1.74 | 2.92 | 0.39 |
+| 4 (2,4-diF-phenyl) | `O=C([O-])Cc1cccc2oc(-c3ccc(F)cc3F)cc(=O)c12` | −8.90 | 0.741 | 2.03 | 2.73 | −0.27 |
+| 5 (para-F-phenyl) | `O=C([O-])Cc1cccc2oc(-c2ccc(F)cc2)cc(=O)c12` | −8.80 | 0.740 | 1.89 | 2.59 | −0.02 |
+
+The key SAR: a **2-naphthyl** group at the flavone 2-position gives better
+shape complementarity than phenyl, boosting scores by ~0.4–0.5 kcal/mol. The
+**sulfonate** anchor scores slightly higher than carboxylate (−9.4 vs −9.3) but
+has lower QED (0.517 vs 0.579). If drug-likeness is the priority, **molecule #3**
+is the best balanced: QED 0.789, SAS 2.92, and still −9.0. The 2,4-difluorophenyl
++ 6-OH pattern had already reached −9.0 in Turn 1 and remains the most
+ligand-efficient option.
+
+Result file: `results/kimi-k2.7-code_HMGCR_2026-06-29_12-18-58.md`
+
 ### Resuming a run
 
 Every run also writes a JSON messages sidecar next to the `.md` report (same
@@ -244,6 +327,36 @@ what it proposed and scored), context-file seeding and the initial model turn
 are skipped, and refinement continues from the last assistant message. A fresh
 timestamped `.md` + sidecar are written for the resumed session; the source
 sidecar is never modified.
+
+## Verifying results
+
+`verify_results.py` parses the final model-response block from a `molopt.py`
+`.md` report, extracts every RDKit-valid SMILES, and recomputes the five project
+metrics by **reusing the existing helpers** (`docking_module.scoring_function`,
+`MolPropOp.lipinski`, `docking_module.calculate_SAS_and_NP`). Novel molecules
+are inserted into a local sqlite DB (`molecules.sqlite`), keyed by canonical
+SMILES + InChIKey; molecules already present are skipped so the DB can be
+incrementally populated across many runs.
+
+```bash
+# verify the most recent run (auto-picks newest results/*.md)
+python3 verify_results.py
+
+# verify a specific run
+python3 verify_results.py results/glm-5.2_HMGCR_2026-06-28_12-44-57.md
+
+# dry-run: just list the SMILES that would be extracted, no docking/DB writes
+python3 verify_results.py results/<run>.md --dry-run
+
+# change DB path or minimum heavy-atom filter (default 5, filters fragment noise)
+python3 verify_results.py results/<run>.md --db molecules.sqlite --min-heavy-atoms 5
+```
+
+The protein target is read from the `.md` header (`# protein: ...`), and the
+docking target is configured the same way `molopt.py` does at runtime (mutating
+the shared `scoring_args` list). For a partial run whose last section is the
+`# Initial model response:`, the verifier falls back to that block, so even a
+killed run's initial proposals can be captured.
 
 ## Smoke-testing models
 
