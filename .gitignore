@@ -15,6 +15,7 @@ venv/
 # --- Run artifacts (regenerated each run) ---
 *.log
 test_mol.sdf
+vina_run_*/
 
 # --- Editor / OS ---
 .DS_Store

@@ -32,7 +32,8 @@ scoring_args = [os.cpu_count(),'DRD2']
 # contact/residue-interaction report. The docking itself goes through dockstring
 # (load_target), which works for any of its 58 built-in targets; this map only
 # selects which prepared receptor is loaded for the *contact analysis* step.
-# Add a new entry here when a new DUD-E receptor .pdb is dropped into the repo.
+# Add a new entry here when a new prepared receptor .pdb is dropped into the repo
+# (DUD-E .pdb files, or a .pdbqt converted via `obabel -ipdbqt x.pdbqt -opdb -O x.pdb`).
 # Keys must match the dockstring target name passed in scoring_args[1] / --protein.
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECEPTOR_FILES = {
@@ -40,6 +41,7 @@ RECEPTOR_FILES = {
     'ADRB1': 'dude_receptor_ADRB1.pdb',
     'ADRB2': 'dude_receptor_ADRB2.pdb',
     'MAOB':  'MAOB-Dud-e-receptor.pdb',
+    'DRD2':  'DRD2_target.pdb',
 }
 
 def _receptor_path(target: str) -> str | None:

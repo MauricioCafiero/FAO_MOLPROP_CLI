@@ -28,7 +28,7 @@ Docking is done with **dockstring** against a receptor (default target HMGCR);
 the prepared DUD-E receptor `.pdb` files live at the repo root. Docking works
 for any of dockstring's 58 targets; the `dock_and_get_interacting_residues`
 residue-contact report additionally needs a prepared receptor PDB on disk.
-Targets with a receptor PDB available are **HMGCR, ADRB1, ADRB2, MAOB**
+Targets with a receptor PDB available are **HMGCR, ADRB1, ADRB2, MAOB, DRD2**
 (mapped in `RECEPTOR_FILES` in `code/docking_module.py`). Docking is the
 runtime bottleneck, not the LLM.
 
@@ -78,6 +78,7 @@ HMGCR_dude_receptor.pdb        # older copy, kept as a backup; not referenced by
 dude_receptor_ADRB1.pdb        # ADRB1 receptor for residue-contact analysis
 dude_receptor_ADRB2.pdb        # ADRB2 receptor for residue-contact analysis
 MAOB-Dud-e-receptor.pdb        # MAOB receptor for residue-contact analysis
+DRD2_target.pdb                # DRD2 receptor (converted from DRD2_target.pdbqt via Open Babel)
 molecules.sqlite               # accumulated verified molecules + recomputed metrics (created on first run)
 results/                       # timestamped session reports (.md) + JSON message sidecars (.json)
 ```
@@ -394,6 +395,41 @@ python3 -u test_models.py --only glm-5.2:cloud  # just one
   point at your own proxy if you actually want one.
 - **Keys per shell**: each fresh shell does not auto-load `.zshrc` exports, so
   `source ~/.zshrc` (or use `.env`) before launching.
+
+## Upcoming: standalone Vina docking (`vina_dock.py`)
+
+`vina_dock.py` (repo root) is a **standalone** AutoDock Vina harness, currently
+tested on its own and **not yet wired into the main `molopt.py` pipeline**. It
+exists to dock **any user-provided receptor PDB** (not just dockstring's 58
+targets) against a **SMILES** ligand, using only tools already in this env:
+
+- the **Vina 1.1.2 binary vendored inside dockstring** (called as a subprocess),
+- **Open Babel** for PDB↔PDBQT conversion (receptor needs `-xr` for a rigid
+  PDBQT, otherwise Vina rejects the torsion-tree records),
+- **RDKit** for ligand 3D embedding.
+
+Two modes:
+
+- **Explicit box** — `--center X Y Z --size ...` docks a defined site.
+- **Blind docking** (`--blind`) — for a novel receptor with no known binding
+  site. A pure-Python (scipy/sklearn) pocket detector scans the receptor for
+  low-atom-density cavities (buriedness grid + clustering), docks the top-N
+  pockets with a focused box, and keeps the best score. No `fpocket`/`p2rank`
+  install needed. Validated on the five DUD-E receptors: the known dockstring
+  site is among the top-3 detected pockets for all five.
+
+```
+# explicit site
+python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' \
+    --center 9.25 6.17 -7.0 --size 25 25 25
+
+# blind (binding site unknown)
+python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' --blind
+```
+
+For **known dockstring targets**, just use `molopt.py`/dockstring directly —
+`vina_dock.py` is for receptors outside dockstring's set. Run outputs go to
+`vina_run_<timestamp>/` (gitignored).
 
 ## TODO / later polish
 
