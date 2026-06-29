@@ -28,6 +28,27 @@ import oddt.toolkits.ob as ob_toolkit  # noqa: F401  (kept for back-compat impor
 
 scoring_args = [os.cpu_count(),'DRD2']
 
+# Receptor PDB files used by dock_and_get_interacting_residues() for the ODDT
+# contact/residue-interaction report. The docking itself goes through dockstring
+# (load_target), which works for any of its 58 built-in targets; this map only
+# selects which prepared receptor is loaded for the *contact analysis* step.
+# Add a new entry here when a new DUD-E receptor .pdb is dropped into the repo.
+# Keys must match the dockstring target name passed in scoring_args[1] / --protein.
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RECEPTOR_FILES = {
+    'HMGCR': 'HMGCR_dude_receptor_2.pdb',
+    'ADRB1': 'dude_receptor_ADRB1.pdb',
+    'ADRB2': 'dude_receptor_ADRB2.pdb',
+    'MAOB':  'MAOB-Dud-e-receptor.pdb',
+}
+
+def _receptor_path(target: str) -> str | None:
+  '''Resolve the receptor PDB path for a target, or None if none is mapped.'''
+  fname = RECEPTOR_FILES.get(target)
+  if fname is None:
+    return None
+  return os.path.join(_REPO_ROOT, fname)
+
 def scoring_function(smiles: str):
   '''
     docks a molecule to the target and returns the docking score. If the docking fails, returns 0.0.
@@ -141,7 +162,17 @@ def dock_and_get_interacting_residues(smiles: str) -> str:
 
   if aux is None:
     return "Docking failed. No interacting residues found."
-  
+
+  target = scoring_args[1]
+  protein_file = _receptor_path(target)
+  if protein_file is None or not os.path.exists(protein_file):
+    # Docking still succeeded; we just don't have a prepared receptor PDB on
+    # disk for this target, so the residue-contact analysis can't be run.
+    return (f"Docking score for the ligand: {score}\n"
+            f"No receptor PDB mapped for target '{target}' "
+            f"(add it to RECEPTOR_FILES in docking_module.py to enable "
+            f"residue-contact analysis).")
+
   pose_mol = aux['ligand']
   pose_mol.SetProp('_Name',str(score))
   sdf_filename = "test_mol.sdf"
@@ -149,7 +180,6 @@ def dock_and_get_interacting_residues(smiles: str) -> str:
   w.write(pose_mol)
   w.close()
 
-  protein_file = 'HMGCR_dude_receptor_2.pdb'
   ligand_file = sdf_filename
 
   pro = next(oddt.toolkit.readfile('pdb',protein_file))

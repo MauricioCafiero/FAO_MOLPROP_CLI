@@ -690,7 +690,11 @@ ANTHROPIC_API_KEY) or a .env file in the working directory; CLI flags override.
 Source ~/.zshrc first if the keys live there.
 """,
     )
-    p.add_argument('--protein', default='HMGCR', help='Docking target (default: HMGCR).')
+    p.add_argument('--protein', default='HMGCR',
+                   help='Docking target, a dockstring target name (default: HMGCR). '
+                        'Docking works for any of dockstring\'s 58 targets; residue-contact '
+                        'analysis (dock_and_get_interacting_residues) needs a prepared '
+                        'receptor PDB on disk: HMGCR, ADRB1, ADRB2, MAOB.')
     p.add_argument('--model', default='deepseek-v4-pro',
                    help='Ollama main model name (default: deepseek-v4-pro). '
                         'See --list-models for the built-in options; use the API '

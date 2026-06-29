@@ -25,8 +25,12 @@ Headless loop, one target at a time:
    final proposal counts) or when `--max-turns` is hit.
 
 Docking is done with **dockstring** against a receptor (default target HMGCR);
-the receptors `HMGCR_dude_receptor.pdb` / `HMGCR_dude_receptor_2.pdb` live at the
-repo root. Docking is the runtime bottleneck, not the LLM.
+the prepared DUD-E receptor `.pdb` files live at the repo root. Docking works
+for any of dockstring's 58 targets; the `dock_and_get_interacting_residues`
+residue-contact report additionally needs a prepared receptor PDB on disk.
+Targets with a receptor PDB available are **HMGCR, ADRB1, ADRB2, MAOB**
+(mapped in `RECEPTOR_FILES` in `code/docking_module.py`). Docking is the
+runtime bottleneck, not the LLM.
 
 ## Architecture
 
@@ -69,8 +73,11 @@ code/
   adversarial_set.md          # starting molecule/score list fed to the model
   MolPropOp.py                # molecular-property operations (grow/replace/...)
   docking_module.py           # dockstring docking + SAS/NP scoring
-HMGCR_dude_receptor_2.pdb      # the receptor actually used by the code (hardcoded in docking_module.py)
+HMGCR_dude_receptor_2.pdb      # HMGCR receptor used by the code (selected via RECEPTOR_FILES)
 HMGCR_dude_receptor.pdb        # older copy, kept as a backup; not referenced by the code
+dude_receptor_ADRB1.pdb        # ADRB1 receptor for residue-contact analysis
+dude_receptor_ADRB2.pdb        # ADRB2 receptor for residue-contact analysis
+MAOB-Dud-e-receptor.pdb        # MAOB receptor for residue-contact analysis
 molecules.sqlite               # accumulated verified molecules + recomputed metrics (created on first run)
 results/                       # timestamped session reports (.md) + JSON message sidecars (.json)
 ```
@@ -145,7 +152,7 @@ See `python3 molopt.py --help` for the full option list and an examples block.
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--protein` | `HMGCR` | Docking target. |
+| `--protein` | `HMGCR` | Dockstring target. Docking works for any of dockstring's 58 targets; residue-contact analysis needs a receptor PDB on disk (HMGCR, ADRB1, ADRB2, MAOB). |
 | `--model` | `deepseek-v4-pro` | Ollama main model (API name, no `-cloud` suffix). |
 | `--adversary` | `openai` | `openai` (default `gpt-5.2`) or `anthropic` (default `claude-haiku-4-5-20251001`). |
 | `--max-turns` | `20` | Safety cap on adversary↔main turns. |
