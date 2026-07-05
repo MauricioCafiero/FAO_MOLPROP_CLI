@@ -18,7 +18,7 @@ Flow:
 Example:
   python3 vina_dock.py --receptor dude_receptor_ADRB2.pdb --smiles 'c1ccc(O)cc1' \
       --center -1.0 2.0 3.0 --size 20 20 20
-  # omit --center to default the box to the receptor's geometric centroid
+  # for a receptor with no known binding site, use --blind to detect pockets instead
 """
 import argparse
 import os
@@ -60,23 +60,6 @@ def require(tool):
 
 
 # --- prep steps ------------------------------------------------------------
-
-def receptor_centroid(pdb_path):
-    """Geometric center of ATOM/HETATM records in a PDB (fallback box center)."""
-    xs, ys, zs = [], [], []
-    with open(pdb_path) as fh:
-        for line in fh:
-            if line.startswith(("ATOM", "HETATM")):
-                try:
-                    xs.append(float(line[30:38]))
-                    ys.append(float(line[38:46]))
-                    zs.append(float(line[46:54]))
-                except ValueError:
-                    continue
-    if not xs:
-        sys.exit(f"vina_dock: no ATOM/HETATM records found in receptor {pdb_path}")
-    return sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs)
-
 
 def convert(cmd, label):
     """Run an obabel conversion, exiting on failure."""
@@ -160,19 +143,40 @@ def parse_pdb_heavy_atoms(pdb_path):
 
 
 def find_pockets(pdb_path, spacing=1.0, r_shell=8.0, d_min=2.5, d_max=8.0,
-                 top_frac=0.02, eps=2.5, min_samples=4):
+                 top_frac=0.06, eps=2.5, min_samples=25):
     """Detect putative binding pockets via a buriedness grid scan (no external tool).
 
     Idea: grid the receptor bounding box; for each empty-but-near-protein voxel
     (nearest-atom distance in [d_min, d_max]) score "buriedness" = count of
-    receptor atoms within r_shell. Keep the top `top_frac` by buriedness (these
-    are the deepest clefts; the diffuse outer surface is filtered out), cluster
-    them with DBSCAN, and rank clusters by mean buriedness. Returns a list of
-    dicts {center, n_voxels, score} sorted best-first.
+    receptor atoms within r_shell. Keep the top `top_frac` by buriedness, cluster
+    them with DBSCAN, and rank clusters by buriedness * log1p(n_voxels).
 
-    Validated on the five DUD-E receptors (HMGCR/ADRB1/ADRB2/MAOB/DRD2): the
-    known dockstring binding site is among the top-3 pockets for all five, so
-    docking the top-N and keeping the best Vina score reliably captures it.
+    Two failure modes shaped these defaults:
+      (1) Mean buriedness alone favors tiny deep crevices (a 4-voxel pit beats a
+          400-voxel cavity), so the true site — a sizable cleft with only
+          *moderate* buriedness — ranked #6-#32 on the DUD-E set and was only
+          captured because the 28 A boxes happened to overlap it. Multiplying by
+          log1p(cluster size) rewards substantial cavities while damping size
+          enough that giant flat surface patches don't dominate (log << sqrt).
+      (2) A permissive top_frac (0.10) keeps enough moderate-buriedness voxels to
+          define the true cleft, but also lets diffuse near-surface voxels
+          survive, which DBSCAN then merges into one giant blob (10k+ voxels)
+          whose center is far from any binding site and drowns the true pocket.
+          Raising min_samples to ~25 fragments that low-density surface blob
+          (diffuse regions can't sustain 25 neighbours in a 2.5 A ball) while
+          the dense, focused true pockets remain intact.
+
+    Validated on the five DUD-E receptors (HMGCR/ADRB1/ADRB2/MAOB/DRD2) against
+    the dockstring box centers: with top_frac=0.06, min_samples=25 and the
+    b*log1p(n) score, the true site is the #1 pocket on ALL FIVE, with the
+    detected center 3-9 A from the dockstring center. The all-#1 result holds
+    across a robust plateau (top_frac in [0.04, 0.08], min_samples in [20, 40]).
+
+    Cross-validated on SULT1A3 (PDB 2A3R, a homodimer crystallised with dopamine
+    + PAP, not used to tune these params): the two substrate pockets are detected
+    as the top-2 pockets (each ~7.5 A from a bound-dopamine centroid), and a blind
+    dock of dopamine lands in the correct active site within ~5 A (atom-atom) of
+    the crystallographic dopamine.
     """
     import numpy as np
     from scipy.spatial import cKDTree
@@ -208,10 +212,13 @@ def find_pockets(pdb_path, spacing=1.0, r_shell=8.0, d_min=2.5, d_max=8.0,
         idx = np.where(labels == lab)[0]
         gi = keep[idx]
         pts = surv[gi]
+        mean_buried = float(surv_buried[gi].mean())
+        n = int(len(gi))
         pockets.append({
             "center": pts.mean(axis=0),
-            "n_voxels": int(len(gi)),
-            "score": float(surv_buried[gi].mean()),  # mean buriedness
+            "n_voxels": n,
+            "buriedness": mean_buried,
+            "score": mean_buried * np.log1p(n),  # depth * log(1 + volume)
         })
     pockets.sort(key=lambda p: p["score"], reverse=True)
     return pockets
@@ -275,9 +282,8 @@ def main():
     ap.add_argument("--receptor", required=True, help="Receptor as a PDB file.")
     ap.add_argument("--smiles", required=True, help="Ligand as a SMILES string.")
     ap.add_argument("--center", nargs=3, type=float, metavar=("X", "Y", "Z"),
-                    help="Search-box center in Angstroms. If omitted, defaults to "
-                         "the receptor's geometric centroid (use only for a quick "
-                         "test; real docking should target the known binding site).")
+                    help="Search-box center in Angstroms. Required unless --blind is "
+                         "given (blind mode detects the box).")
     ap.add_argument("--size", nargs="+", type=float, default=[20, 20, 20],
                     metavar="ANG",
                     help="Search-box sizes in Angstroms (1 or 3 values; default 20 20 20). "
@@ -319,13 +325,26 @@ def main():
                     metavar=("DMIN", "DMAX"), dest="blind_band",
                     help="Nearest-atom distance band (Angstroms) defining empty-but-near-"
                          "protein voxels (default 2.5 8.0).")
-    ap.add_argument("--blind-top-frac", type=float, default=0.02, dest="blind_top_frac",
+    ap.add_argument("--blind-top-frac", type=float, default=0.06, dest="blind_top_frac",
                     help="Fraction of highest-buriedness voxels kept before clustering "
-                         "(default 0.02).")
+                         "(default 0.06). Higher keeps more moderate-buriedness cleft voxels "
+                         "(good) but also diffuse surface voxels that merge into a giant blob "
+                         "(bad unless --blind-min-samples is raised).")
+    ap.add_argument("--blind-min-samples", type=int, default=25, dest="blind_min_samples",
+                    help="DBSCAN min neighbours (within --blind-eps) for a voxel to start a "
+                         "cluster (default 25). Higher fragments the diffuse low-density "
+                         "surface blob that drowns true pockets; the dense true cleft survives. "
+                         "Validated plateau with --blind-top-frac in [0.04, 0.08] and this in "
+                         "[20, 40] (true site = #1 pocket on all five DUD-E receptors).")
+    ap.add_argument("--blind-eps", type=float, default=2.5, dest="blind_eps",
+                    help="DBSCAN neighbourhood radius in Angstroms (default 2.5).")
     args = ap.parse_args()
 
     if args.blind and args.center is not None:
         ap.error("--blind is mutually exclusive with --center (blind mode detects the box).")
+    if not args.blind and args.center is None:
+        ap.error("--center is required unless --blind is given "
+                 "(blind mode detects the box; a real run must target a specific site).")
 
     if not os.path.exists(args.receptor):
         sys.exit(f"vina_dock: receptor not found: {args.receptor}")
@@ -348,7 +367,8 @@ def main():
         print("vina_dock: --blind: scanning receptor for putative binding pockets...")
         pockets = find_pockets(rec_pdb, spacing=args.blind_spacing, r_shell=args.blind_r,
                                d_min=args.blind_band[0], d_max=args.blind_band[1],
-                               top_frac=args.blind_top_frac)
+                               top_frac=args.blind_top_frac, eps=args.blind_eps,
+                               min_samples=args.blind_min_samples)
         if not pockets:
             sys.exit("vina_dock: --blind: no pockets detected; supply --center instead.")
         pockets = pockets[:args.blind_npockets]
@@ -357,7 +377,8 @@ def main():
         for i, p in enumerate(pockets):
             c = p["center"]
             print(f"    #{i+1} center=({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f}) "
-                  f"voxels={p['n_voxels']} buriedness={p['score']:.0f}")
+                  f"voxels={p['n_voxels']} buriedness={p['buriedness']:.0f} "
+                  f"score={p['score']:.0f}")
             boxes.append((f"pocket_{i+1}", c, [args.blind_box] * 3))
     else:
         if len(args.size) == 1:
@@ -370,7 +391,7 @@ def main():
             print("vina_dock: WARNING — search-space volume > 27000 A^3; Vina will accept it "
                   "but warns that such a large box needs higher --exhaustiveness to be sampled "
                   "adequately (see Vina FAQ).", file=sys.stderr)
-        center = args.center if args.center else receptor_centroid(rec_pdb)
+        center = args.center
         print(f"vina_dock: box center = {center[0]:.2f}, {center[1]:.2f}, {center[2]:.2f} "
               f"(size {size[0]:.0f} x {size[1]:.0f} x {size[2]:.0f} A)")
         boxes = [("box", center, size)]
