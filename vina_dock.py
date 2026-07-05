@@ -21,14 +21,27 @@ Example:
   # for a receptor with no known binding site, use --blind to detect pockets instead
 """
 import argparse
+import contextlib
+import io
 import os
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
+from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+class DockError(Exception):
+    """Recoverable docking failure (bad SMILES, Vina crash, obabel error, ...).
+
+    Raised by the helpers instead of sys.exit so the agent-facing blind_dock()
+    can fail one molecule and continue with the rest. The CLI main() catches
+    this and converts it to a clean sys.exit with the message.
+    """
 
 
 # --- tool discovery --------------------------------------------------------
@@ -37,13 +50,13 @@ def find_vina_bin(explicit=None):
     """Locate the Vina binary: an explicit path, else dockstring's vendored copy."""
     if explicit:
         if not os.path.exists(explicit):
-            sys.exit(f"vina_dock: --vina-bin not found: {explicit}")
+            raise DockError(f"--vina-bin not found: {explicit}")
         return explicit
     try:
         import dockstring
     except ImportError:
-        sys.exit("vina_dock: could not import dockstring to locate the vendored "
-                 "Vina binary; pass --vina-bin /path/to/vina explicitly.")
+        raise DockError("could not import dockstring to locate the vendored "
+                        "Vina binary; pass --vina-bin /path/to/vina explicitly.")
     candidates = [
         os.path.join(os.path.dirname(dockstring.__file__), "resources", "bin", "vina_mac_catalina"),
         os.path.join(os.path.dirname(dockstring.__file__), "resources", "bin", "vina_linux"),
@@ -51,22 +64,22 @@ def find_vina_bin(explicit=None):
     for c in candidates:
         if os.path.exists(c):
             return c
-    sys.exit(f"vina_dock: no vendored Vina binary found under {os.path.dirname(dockstring.__file__)}")
+    raise DockError(f"no vendored Vina binary found under {os.path.dirname(dockstring.__file__)}")
 
 
 def require(tool):
     if shutil.which(tool) is None:
-        sys.exit(f"vina_dock: required tool '{tool}' not found on PATH.")
+        raise DockError(f"required tool '{tool}' not found on PATH.")
 
 
 # --- prep steps ------------------------------------------------------------
 
 def convert(cmd, label):
-    """Run an obabel conversion, exiting on failure."""
+    """Run an obabel conversion, raising DockError on failure."""
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        sys.exit(f"vina_dock: {label} failed (obabel exit {res.returncode})\n"
-                 f"  cmd: {' '.join(cmd)}\n  stderr: {res.stderr.strip()}")
+        raise DockError(f"{label} failed (obabel exit {res.returncode})\n"
+                        f"  cmd: {' '.join(cmd)}\n  stderr: {res.stderr.strip()}")
     return res.stdout.strip()
 
 
@@ -76,10 +89,10 @@ def build_ligand_pdbqt(smiles, sdf_path, pdbqt_path):
     from rdkit.Chem import AllChem
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        sys.exit(f"vina_dock: could not parse SMILES: {smiles}")
+        raise DockError(f"could not parse SMILES: {smiles}")
     mol = Chem.AddHs(mol)
     if AllChem.EmbedMolecule(mol, randomSeed=0xF1A9) != 0:
-        sys.exit(f"vina_dock: RDKit 3D embedding failed for SMILES: {smiles}")
+        raise DockError(f"RDKit 3D embedding failed for SMILES: {smiles}")
     try:
         AllChem.MMFFOptimizeMolecule(mol)
     except Exception:
@@ -138,7 +151,7 @@ def parse_pdb_heavy_atoms(pdb_path):
         except ValueError:
             continue
     if not coords:
-        sys.exit(f"vina_dock: no ATOM heavy-atom coordinates parsed from {pdb_path}")
+        raise DockError(f"no ATOM heavy-atom coordinates parsed from {pdb_path}")
     return np.array(coords)
 
 
@@ -184,8 +197,8 @@ def find_pockets(pdb_path, spacing=1.0, r_shell=8.0, d_min=2.5, d_max=8.0,
 
     coords = parse_pdb_heavy_atoms(pdb_path)
     if len(coords) < 100:
-        sys.exit(f"vina_dock: --blind: only {len(coords)} heavy atoms; "
-                 "pocket detection is unreliable on such a small receptor.")
+        raise DockError(f"--blind: only {len(coords)} heavy atoms; "
+                        "pocket detection is unreliable on such a small receptor.")
     tree = cKDTree(coords)
     lo = coords.min(axis=0) - 2.0
     hi = coords.max(axis=0) + 2.0
@@ -199,8 +212,8 @@ def find_pockets(pdb_path, spacing=1.0, r_shell=8.0, d_min=2.5, d_max=8.0,
     surv = grid[band]
     surv_buried = buried[band]
     if len(surv) < 50:
-        sys.exit("vina_dock: --blind: no near-protein empty voxels found; "
-                 "check the receptor or widen --blind-band.")
+        raise DockError("--blind: no near-protein empty voxels found; "
+                        "check the receptor or widen --blind-band.")
 
     thr = np.quantile(surv_buried, 1 - top_frac)
     keep = np.where(surv_buried >= thr)[0]
@@ -245,8 +258,8 @@ def run_vina(vina_bin, rec_pdbqt, lig_pdbqt, center, size, args, out_pdbqt, log_
     print(f"vina_dock: running Vina...\n  {' '.join(cmd)}")
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
-        sys.exit(f"vina_dock: Vina failed (exit {res.returncode})\n"
-                 f"  stderr: {res.stderr.strip()}\n  stdout: {res.stdout.strip()}")
+        raise DockError(f"Vina failed (exit {res.returncode})\n"
+                        f"  stderr: {res.stderr.strip()}\n  stdout: {res.stdout.strip()}")
     if res.stderr.strip():
         # Vina prints progress/notes on stderr; surface it for transparency.
         print(f"vina_dock: Vina stderr:\n{res.stderr.strip()}")
@@ -272,6 +285,166 @@ def parse_vina_log(log_path):
     if not affinities:
         return None, 0
     return affinities[0], len(affinities)
+
+
+# --- agent-facing blind-docking API ----------------------------------------
+
+def blind_dock(receptor_pdb, smiles_list, npockets=1, exhaustiveness=8,
+               num_modes=3, seed=0, cpu=0, vina_bin=None,
+               blind_box=28.0, blind_spacing=1.0, blind_r=8.0,
+               blind_band=(2.5, 8.0), blind_top_frac=0.06,
+               blind_min_samples=25, blind_eps=2.5,
+               overwrite_receptor=False, verbose=False):
+    """Blind-dock a list of ligands into a receptor of unknown binding site.
+
+    A standalone, side-effect-explicit tool for an agent: it detects putative
+    binding pockets with find_pockets() (once, reused for every ligand), docks
+    each SMILES into the top `npockets` pockets with Vina, and returns a
+    multi-line report. The true binding site is the #1 pocket on the validated
+    DUD-E set + SULT1A3, so npockets=1 (the default) is fast and usually enough;
+    raise it to 3 for a safety net on a novel receptor.
+
+    Persisted artefacts (next to the input PDB):
+      - <stem>.pdbqt      rigid receptor (built once, reused across calls unless
+                          overwrite_receptor=True)
+      - <stem>_<i>.sdf    top-`num_modes` poses (capped to 3) for molecule i,
+                          from that molecule's best-scoring pocket
+    Per-run intermediates (ligand PDBQT, per-pocket poses/logs) go to a temp
+    dir that is cleaned up at the end.
+
+    Args:
+        receptor_pdb: path to a receptor PDB file (binding site unknown).
+        smiles_list: iterable of ligand SMILES strings.
+        npockets: number of top-ranked pockets to dock each ligand into (1).
+        exhaustiveness, num_modes, seed, cpu: Vina params. num_modes caps the
+            poses written to each SDF at 3 (Vina outputs num_modes poses; the
+            SDF keeps the top 3).
+        vina_bin: explicit Vina binary; default uses dockstring's vendored copy.
+        blind_*: forwarded to find_pockets() (defaults are the validated ones).
+        overwrite_receptor: rebuild <stem>.pdbqt even if it already exists.
+        verbose: if True, surface Vina/obabel progress on stdout/stderr;
+            default False (quiet; failures are captured in the report).
+
+    Returns:
+        A multi-line string report (header with receptor + receptor-PDBQT path
+        + pocket centers, one block per molecule with score + pocket used +
+        pose-SDF path, and an overall best-molecule line). Failed molecules are
+        marked and do not abort the rest.
+
+    Raises:
+        DockError only for setup failures that affect every molecule (receptor
+        missing, obabel/Vina not found, no pockets detected). Per-molecule
+        failures are caught and reported, not raised.
+    """
+    smiles_list = list(smiles_list)
+    if not os.path.exists(receptor_pdb):
+        raise DockError(f"receptor not found: {receptor_pdb}")
+    require("obabel")
+    vina_bin = find_vina_bin(vina_bin)
+    receptor_pdb = os.path.abspath(receptor_pdb)
+    stem = os.path.splitext(receptor_pdb)[0]
+    rec_pdbqt = stem + ".pdbqt"
+
+    # Quiet mode: swallow the helpers' progress/warning prints so the returned
+    # report is the sole, clean output. Failures still surface via DockError
+    # messages (convert/run_vina embed the relevant stderr).
+    with contextlib.ExitStack() as stack:
+        if not verbose:
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            # RDKit writes SMILES-parse warnings to C-level stderr (fd 2), which
+            # bypasses redirect_stderr. Mute its app logger for the call so a
+            # bad SMILES is reported only via the returned DockError message.
+            try:
+                from rdkit import RDLogger
+                RDLogger.DisableLog("rdApp.*")
+                stack.callback(RDLogger.EnableLog, "rdApp.*")
+            except Exception:
+                pass
+
+        # 1) rigid receptor PDBQT (build once, reuse across calls)
+        if overwrite_receptor or not os.path.exists(rec_pdbqt):
+            build_receptor_pdbqt(receptor_pdb, rec_pdbqt)
+
+        # 2) detect pockets once, reuse for every ligand
+        pockets = find_pockets(receptor_pdb, spacing=blind_spacing, r_shell=blind_r,
+                               d_min=blind_band[0], d_max=blind_band[1],
+                               top_frac=blind_top_frac, eps=blind_eps,
+                               min_samples=blind_min_samples)
+        if not pockets:
+            raise DockError("no pockets detected in receptor")
+        pockets = pockets[:max(1, npockets)]
+        box_size = [blind_box] * 3
+
+        # 3) dock each ligand into the top-N pockets, keep best score
+        work = tempfile.mkdtemp(prefix="blind_dock_")
+        vina_args = SimpleNamespace(exhaustiveness=exhaustiveness,
+                                    num_modes=max(num_modes, 3), cpu=cpu, seed=seed)
+        n_out_poses = min(3, vina_args.num_modes)
+        results = []  # (idx, smi, affinity, best_pocket, sdf_path, status, detail)
+        for idx, smi in enumerate(smiles_list):
+            sdf_path = f"{stem}_{idx}.sdf"
+            try:
+                lig_sdf = os.path.join(work, f"ligand_{idx}.sdf")
+                lig_pdbqt = os.path.join(work, f"ligand_{idx}.pdbqt")
+                build_ligand_pdbqt(smi, lig_sdf, lig_pdbqt)
+                pocket_res = []
+                for j, p in enumerate(pockets):
+                    poses_pdbqt = os.path.join(work, f"poses_{idx}_p{j+1}.pdbqt")
+                    log_path = os.path.join(work, f"vina_{idx}_p{j+1}.log")
+                    run_vina(vina_bin, rec_pdbqt, lig_pdbqt, p["center"],
+                             box_size, vina_args, poses_pdbqt, log_path)
+                    aff, nmodes = parse_vina_log(log_path)
+                    pocket_res.append((j + 1, aff, nmodes, poses_pdbqt))
+                valid = [r for r in pocket_res if r[1] is not None]
+                if not valid:
+                    results.append((idx, smi, None, None, sdf_path,
+                                    "failed", "no score parsed from any Vina log"))
+                    continue
+                bj, baff, bnm, bpp = min(valid, key=lambda r: r[1])
+                convert(["obabel", "-ipdbqt", bpp, "-osdf", "-O", sdf_path,
+                         "-l", str(n_out_poses)],
+                        f"pose PDBQT->SDF (mol {idx}, top {n_out_poses})")
+                results.append((idx, smi, baff, bj, sdf_path, "ok",
+                                f"{bnm} modes"))
+            except DockError as e:
+                results.append((idx, smi, None, None, sdf_path, "failed", str(e)))
+            except Exception as e:  # defensive: never let one molecule kill the run
+                results.append((idx, smi, None, None, sdf_path, "error",
+                                f"{type(e).__name__}: {e}"))
+
+    shutil.rmtree(work, ignore_errors=True)
+
+    # 4) build the report
+    lines = []
+    lines.append("Blind docking report")
+    lines.append(f"  receptor:     {receptor_pdb}")
+    lines.append(f"  receptor PDBQT: {rec_pdbqt}")
+    lines.append(f"  vina binary: {vina_bin}")
+    lines.append(f"  pockets docked (top {len(pockets)}):")
+    for i, p in enumerate(pockets):
+        c = p["center"]
+        lines.append(f"    #{i+1} ({c[0]:.2f}, {c[1]:.2f}, {c[2]:.2f}) "
+                     f"voxels={p['n_voxels']} buriedness={p['buriedness']:.0f} "
+                     f"score={p['score']:.0f}")
+    lines.append("")
+    lines.append(f"Molecules ({len(results)}):")
+    for idx, smi, aff, pj, sdf, status, detail in results:
+        lines.append(f"  [{idx}] {smi}")
+        if status == "ok":
+            lines.append(f"        score: {aff:.2f} kcal/mol   (best pocket #{pj}, {detail})")
+            lines.append(f"        poses SDF (top {n_out_poses}): {sdf}")
+        else:
+            lines.append(f"        {status}: {detail}")
+    lines.append("")
+    ok = [r for r in results if r[5] == "ok"]
+    if ok:
+        bidx, bsmi, baff, bpj, bsdf, _, _ = min(ok, key=lambda r: r[2])
+        lines.append(f"Best molecule: [{bidx}] {bsmi}  "
+                     f"score={baff:.2f} kcal/mol  SDF={bsdf}")
+    else:
+        lines.append("Best molecule: none docked successfully")
+    return "\n".join(lines)
 
 
 # --- main ------------------------------------------------------------------
@@ -453,4 +626,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except DockError as e:
+        sys.exit(f"vina_dock: {e}")
