@@ -1,8 +1,9 @@
-pyscf 
-rdkit 
-pubchempy 
-openbabel-wheel 
-dockstring 
+pyscf
+rdkit
+scipy
+pubchempy
+openbabel-wheel
+dockstring
 ollama 
 anthropic
 openai

@@ -396,27 +396,43 @@ python3 -u test_models.py --only glm-5.2:cloud  # just one
 - **Keys per shell**: each fresh shell does not auto-load `.zshrc` exports, so
   `source ~/.zshrc` (or use `.env`) before launching.
 
-## Upcoming: standalone Vina docking (`vina_dock.py`)
+## Standalone Vina docking (`vina_dock.py`)
 
-`vina_dock.py` (repo root) is a **standalone** AutoDock Vina harness, currently
-tested on its own and **not yet wired into the main `molopt.py` pipeline**. It
-exists to dock **any user-provided receptor PDB** (not just dockstring's 58
-targets) against a **SMILES** ligand, using only tools already in this env:
+`vina_dock.py` (repo root) is a **standalone** AutoDock Vina harness, deliberately
+separate from the `molopt.py` / `docking_module.py` pipeline (and not wired into
+the optimizer). It docks **any user-provided receptor PDB** (not just dockstring's
+58 targets) against a **SMILES** ligand, using only tools already in this env:
 
 - the **Vina 1.1.2 binary vendored inside dockstring** (called as a subprocess),
 - **Open Babel** for PDB↔PDBQT conversion (receptor needs `-xr` for a rigid
   PDBQT, otherwise Vina rejects the torsion-tree records),
-- **RDKit** for ligand 3D embedding.
+- **RDKit** for ligand 3D embedding,
+- **scipy** (`cKDTree`) for the blind pocket detector.
 
-Two modes:
+### Agent API (Python)
 
-- **Explicit box** — `--center X Y Z --size ...` docks a defined site.
-- **Blind docking** (`--blind`) — for a novel receptor with no known binding
-  site. A pure-Python (scipy/sklearn) pocket detector scans the receptor for
-  low-atom-density cavities (buriedness grid + clustering), docks the top-N
-  pockets with a focused box, and keeps the best score. No `fpocket`/`p2rank`
-  install needed. Validated on the five DUD-E receptors: the known dockstring
-  site is among the top-3 detected pockets for all five.
+The primary entry point for use as an agent tool is the `blind_dock()` function:
+
+```python
+from vina_dock import blind_dock
+report = blind_dock("my_receptor.pdb", ["c1ccc(O)cc1", "CCO"], npockets=1)
+print(report)
+```
+
+`blind_dock(receptor_pdb, smiles_list, npockets=1, ...) -> str` detects pockets
+once and reuses them for every ligand, docks each SMILES into the top `npockets`
+(default 1 — the validated #1 site; raise to 3 for a safety net on a novel
+receptor), and returns a multi-line report (receptor + receptor-PDBQT path +
+pocket centers; per-molecule score + pocket used + pose-SDF path; overall best
+molecule). **Per-molecule failures are caught and reported, not raised** — one
+bad SMILES never aborts the batch. Only setup failures (missing receptor, no
+obabel/Vina, no pockets detected) raise `DockError`.
+
+Persisted artefacts (next to the input PDB): `<stem>.pdbqt` (rigid receptor,
+built once) and `<stem>_<i>.sdf` (top-3 poses for molecule i, from its
+best-scoring pocket). Per-run intermediates go to a temp dir cleaned at the end.
+
+### CLI
 
 ```
 # explicit site
@@ -427,9 +443,24 @@ python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' \
 python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' --blind
 ```
 
-For **known dockstring targets**, just use `molopt.py`/dockstring directly —
-`vina_dock.py` is for receptors outside dockstring's set. Run outputs go to
+CLI failures raise `DockError`, caught at the entry point into a clean
+`sys.exit("vina_dock: <msg>")`. CLI run intermediates go to
 `vina_run_<timestamp>/` (gitignored).
+
+### Blind pocket detection
+
+`--blind` / the `blind_dock()` API scan the receptor for low-atom-density
+cavities: a scipy `cKDTree` buriedness grid (atoms within an 8 Å shell), keep the
+top `top_frac` (0.06) most-buried voxels, DBSCAN-cluster, and rank pockets by
+`buriedness · log1p(n_voxels)` with `min_samples=25` to fragment diffuse
+surface blobs. No `fpocket`/`p2rank` install needed. Validated 5/5 on the DUD-E
+receptors — the known dockstring site is the **#1** detected pocket on all five
+(5.4–7.5 Å from the dockstring box center), and cross-validated on SULT1A3
+(PDB 2A3R): both substrate sites recovered as top-2, blind-docked dopamine
+6.6 Å from the crystallographic ligand.
+
+For **known dockstring targets**, just use `molopt.py`/dockstring directly —
+`vina_dock.py` is for receptors outside dockstring's set.
 
 ## TODO / later polish
 
