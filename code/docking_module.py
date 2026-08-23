@@ -1,7 +1,7 @@
 from dockstring import load_target
 from rdkit import Chem
 from rdkit.Chem import RDConfig
-import sys, os
+import sys, os, tempfile
 sys.path.append(os.path.join(RDConfig.RDContribDir, 'SA_Score'))
 sys.path.append(os.path.join(RDConfig.RDContribDir, 'NP_Score'))
 import sascorer, npscorer
@@ -57,7 +57,9 @@ def scoring_function(smiles: str):
   '''
   target = load_target(scoring_args[1])
   try:
-    score, aux = target.dock(smiles, scoring_args[0])
+    # scoring_args[0] is os.cpu_count(); bind it to num_cpus (not pH, the 2nd
+    # positional arg of dockstring's dock(smiles, pH=7.4, num_cpus=None, ...)).
+    score, aux = target.dock(smiles, num_cpus=scoring_args[0])
   except:
     score = 0.0
     aux = None
@@ -267,6 +269,84 @@ def find_contacts(pro, lig) -> str:
   output_string += f'List of all interacting residues:\n {', '.join(interacting_residues)}'
 
   return output_string
+
+
+# --- pocket-contact helpers (used by analyze_replicates) ---------------------
+
+_RESIDUE_LIST_TAG = 'List of all interacting residues:'
+_RECEPTOR_CACHE = {}
+
+
+def _parse_residue_list(text):
+  """Pull residue ids out of a 'List of all interacting residues:' line.
+
+  Works on both find_contacts() output and the system-message prompt
+  (task_specific_tools), which use the same format. Returns a set of
+  residue ids like {'GLU119', 'LYS295', ...}, or an empty set if the tag
+  is absent.
+  """
+  idx = text.find(_RESIDUE_LIST_TAG)
+  if idx < 0:
+    return set()
+  rest = text[idx + len(_RESIDUE_LIST_TAG):]
+  # Stop at a following section header if one was appended after the list.
+  nl = rest.find('\n#')
+  if nl >= 0:
+    rest = rest[:nl]
+  return {r.strip() for r in rest.split(',') if r.strip()}
+
+
+def target_residues():
+  """The known binding-site residues named in the system message
+  (task_specific_tools) -- e.g. Rosuvastatin's contacts for HMGCR. These are
+  the residues a proposed molecule should contact to count as 'in the pocket'.
+  Empty set if the prompt does not state them (e.g. a target with no known
+  contact list)."""
+  return _parse_residue_list(task_specific_tools)
+
+
+def _receptor_oddt(protein_file):
+  """Load and cache the receptor as an ODDT protein object (one per file)."""
+  if protein_file not in _RECEPTOR_CACHE:
+    pro = next(oddt.toolkit.readfile('pdb', protein_file))
+    pro.protein = True
+    _RECEPTOR_CACHE[protein_file] = pro
+  return _RECEPTOR_CACHE[protein_file]
+
+
+def contacted_residues(aux):
+  """Set of protein residues contacted by a docked pose.
+
+  aux: the auxiliary dict returned by scoring_function (aux['ligand'] is the
+  docked pose mol). Returns None if aux is None (docking failed) or no receptor
+  PDB is mapped for the current target (scoring_args[1]) so contact analysis
+  can't run. Reuses find_contacts; the receptor is cached across calls and a
+  throwaway temp sdf is used (test_mol.sdf is not clobbered).
+  """
+  if aux is None:
+    return None
+  target = scoring_args[1]
+  protein_file = _receptor_path(target)
+  if protein_file is None or not os.path.exists(protein_file):
+    return None
+  pro = _receptor_oddt(protein_file)
+  pose_mol = aux['ligand']
+  fd, ligand_file = tempfile.mkstemp(suffix='.sdf')
+  try:
+    os.close(fd)
+    w = Chem.SDWriter(ligand_file)
+    w.write(pose_mol)
+    w.close()
+    lig = next(oddt.toolkit.readfile('sdf', ligand_file))
+    contact_str = find_contacts(pro, lig)
+  except Exception:
+    return None
+  finally:
+    try:
+      os.remove(ligand_file)
+    except OSError:
+      pass
+  return _parse_residue_list(contact_str)
 
 
 auxilliary_functions = [dock_and_get_interacting_residues, calculate_SAS_and_NP]

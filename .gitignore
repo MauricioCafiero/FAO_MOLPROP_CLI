@@ -21,3 +21,7 @@ vina_run_*/
 .DS_Store
 .idea/
 .vscode/
+
+# --- Results batches (private study output; lives in its own private repo) ---
+# Do NOT commit run transcripts to the (public) parent repo.
+results/batches/

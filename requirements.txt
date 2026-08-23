@@ -1,10 +1,14 @@
 pyscf
 rdkit
 scipy
+scikit-learn
 pubchempy
 openbabel-wheel
 dockstring
-ollama 
+ollama
 anthropic
 openai
+
+# optional: only needed by analyze_replicates.py (replicate comparison plots)
+# matplotlib
 

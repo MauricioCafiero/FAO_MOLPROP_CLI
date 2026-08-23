@@ -102,6 +102,25 @@ def parse_header(md_text):
     return protein, model
 
 
+def all_model_response_blocks(md_text):
+    """Return the body texts of every proposer model-response section, in document order.
+
+    Recognises `# Initial model response:` (turn 0) and each `# Model response:`
+    (turns 1..N). Adversary-feedback sections are excluded. Each body runs from
+    the line after the header up to (but not including) the next molopt top-level
+    section. Empty list if the run ended before any model turn produced text.
+    """
+    starts = [(m.end(), m.group(1))
+              for m in _SECTION_START_RE.finditer(md_text)
+              if m.group(1) in ('Initial model response', 'Model response')]
+    blocks = []
+    for start, _name in starts:
+        nxt = _SECTION_START_RE.search(md_text, start)
+        end = nxt.start() if nxt else len(md_text)
+        blocks.append(md_text[start:end].strip())
+    return blocks
+
+
 def last_model_response_block(md_text):
     """Return the body text of the last model-response section in the md.
 
@@ -110,15 +129,8 @@ def last_model_response_block(md_text):
     molopt top-level section. Returns '' if the run ended before any model turn
     produced text (e.g. a killed run with only the header written).
     """
-    starts = [(m.end(), m.group(1))
-              for m in _SECTION_START_RE.finditer(md_text)
-              if m.group(1) in ('Initial model response', 'Model response')]
-    if not starts:
-        return ''
-    start = starts[-1][0]
-    nxt = _SECTION_START_RE.search(md_text, start)
-    end = nxt.start() if nxt else len(md_text)
-    return md_text[start:end].strip()
+    blocks = all_model_response_blocks(md_text)
+    return blocks[-1] if blocks else ''
 
 
 # --- SMILES extraction -------------------------------------------------------

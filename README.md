@@ -59,7 +59,10 @@ runtime bottleneck, not the LLM.
 ## Repository layout
 
 ```
-molopt.py                     # the CLI (entrypoint)
+molopt.py                     # the CLI: Ollama main model + OpenAI/Anthropic adversary
+molopt_oa.py                  # variant: OpenAI <-> Anthropic adversaries (--start selects proposer)
+run_replicates.py             # run N replicates of each adversary set; writes a manifest
+analyze_replicates.py         # compare final compounds across sets/replicates (CSV + stats + plots)
 test_models.py                # smoke-test candidate Ollama cloud models
 verify_results.py             # verify a run's final molecules and store them in sqlite
 Ollama_MolOpt.ipynb           # original notebook (reference, not deleted)
@@ -107,6 +110,17 @@ pip install --no-build-isolation -r requirements-oddt.txt   # oddt
 pip install -r requirements.txt
 ```
 
+> **Activate the venv before running anything** (`source fao-env/bin/activate`), not just
+> `fao-env/bin/python ...`. The openbabel Python bindings and the `obabel` CLI that dockstring
+> shells out to both need `fao-env/bin` on PATH; without activation `import oddt` crashes with
+> `AttributeError: ...OBElementTable` and docking fails with `FileNotFoundError: obabel`.
+
+> **Replicate analysis** (`analyze_replicates.py`) also needs matplotlib, which is *not* in
+> `requirements.txt` (it's optional, analysis-only): `pip install matplotlib` in the activated
+> venv. Run a batch with `run_replicates.py`, then `python analyze_replicates.py --batch-dir
+> results/batches/<batch_id>`. Add `--skip-docking` to produce all CSVs/plots without the
+> CPU-heavy dockstring recomputation.
+
 > **Why the order matters:** `oddt` is unmaintained and its build is fragile. If
 > you `pip install -r requirements.txt` first and then `oddt`, or let `oddt`
 > build in isolation, it can pull an incompatible NumPy / fail to compile, which
@@ -147,7 +161,17 @@ python3 molopt.py --model qwen3.5:397b \
 python3 molopt.py --self-test
 ```
 
-See `python3 molopt.py --help` for the full option list and an examples block.
+`molopt_oa.py` is the OpenAI↔Anthropic variant (no Ollama): `--start openai|anthropic`
+picks which provider leads as the tool-calling proposer; the other provider is the
+critique-only adversary. Otherwise the loop and outputs are the same as `molopt.py`.
+
+```bash
+python3 molopt_oa.py --protein HMGCR --start openai \
+  --openai-model gpt-5.2 --anthropic-model claude-haiku-4-5-20251001
+python3 molopt_oa.py --self-test
+```
+
+See `python3 molopt.py --help` / `python3 molopt_oa.py --help` for the full option lists.
 
 ### Key flags
 
@@ -365,6 +389,67 @@ docking target is configured the same way `molopt.py` does at runtime (mutating
 the shared `scoring_args` list). For a partial run whose last section is the
 `# Initial model response:`, the verifier falls back to that block, so even a
 killed run's initial proposals can be captured.
+
+## Replicate comparison (`run_replicates.py` + `analyze_replicates.py`)
+
+To compare how the **adversary pairing** affects the designed molecules, run several
+replicates of each adversary set, then analyze the final compounds by property.
+
+The four adversary sets (each is one (proposer, adversary) pairing; the proposer has
+the chemistry tools, the adversary critiques):
+
+| set label              | script        | proposer (tools) | adversary (critique) |
+|------------------------|---------------|------------------|----------------------|
+| `openai_vs_anthropic`  | `molopt_oa.py` `--start openai`    | OpenAI    | Anthropic |
+| `anthropic_vs_openai`  | `molopt_oa.py` `--start anthropic` | Anthropic | OpenAI    |
+| `ollama_vs_openai`     | `molopt.py` `--adversary openai`    | Ollama    | OpenAI    |
+| `ollama_vs_anthropic`  | `molopt.py` `--adversary anthropic` | Ollama    | Anthropic |
+
+`run_replicates.py` runs `--replicates` sessions of each set **sequentially** (docking
+is CPU-bound, so no parallelism). Each replicate gets its own `--results-dir` under
+`results/batches/<batch_id>/<set>/rep<N>/` (one run → one `.md` + one `.json` sidecar),
+and a `manifest.json` at the batch root records every job. It is resumable: a replicate
+with a terminal sidecar (`Done` / `max_turns_reached`) is skipped on re-launch, so a
+killed batch loses no completed work (`--force` re-runs all). It refuses to run unless
+`obabel` is on PATH — i.e. the venv is activated (see the note in Install).
+
+```bash
+source fao-env/bin/activate          # required (openbabel bindings + obabel CLI)
+
+# quick: 1 rep of one set, see the commands only
+python run_replicates.py --dry-run --replicates 1 --sets openai_vs_anthropic
+
+# real batch: 3 reps of all 4 sets. Launch detached so a long batch survives the shell:
+fao-env/bin/python -c "import subprocess; subprocess.Popen(['fao-env/bin/python','run_replicates.py','--replicates','3'], stdout=open('run_replicates.log','ab'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)"
+tail -f run_replicates.log
+```
+
+Then analyze. `analyze_replicates.py` reads the manifest, extracts the final-compound
+SMILES from each completed run's last model-response block (reusing `verify_results.py`'s
+extractor), recomputes the five metrics (docking, QED, aLogP, SAS, NP) via the project
+helpers, and writes to `results/batches/<batch_id>/analysis/`:
+
+- `compounds_<batch>.csv` — one row per proposed molecule, tagged with
+  `set_label, replicate, proposer_model, adversary_model, protein` + the 5 metrics.
+- `summary_<batch>.csv` — per-set aggregate stats (n_compounds, n_unique, docking
+  mean/median/best, QED/aLogP/SAS/NP means).
+- `best_per_replicate_<batch>.csv` — best-by-docking molecule per (set, replicate).
+- `dock_dist_by_set.png`, `best_dock_by_replicate.png`, `qed_vs_dock.png`,
+  `property_dist_by_set.png`.
+
+Unlike `verify_results.py` (which dedups globally and skips known molecules), the
+analyzer calls the extractor per-run independently, so the **same SMILES appearing in
+multiple replicates is kept** — that overlap is part of the comparison.
+
+```bash
+python analyze_replicates.py --batch-dir results/batches/<batch_id>
+# CPU-light check: RDKit-only metrics + all CSVs/plots, no dockstring recomputation:
+python analyze_replicates.py --batch-dir results/batches/<batch_id> --skip-docking
+```
+
+`--skip-docking` leaves the `docking` column blank and skips the docking-dependent
+plots; the QED/aLogP/SAS/NP metrics (RDKit-only) and the property/QED plots are still
+produced. Requires `matplotlib` (see the note in Install).
 
 ## Smoke-testing models
 
