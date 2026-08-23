@@ -289,12 +289,38 @@ def parse_vina_log(log_path):
 
 # --- agent-facing blind-docking API ----------------------------------------
 
-def blind_dock(receptor_pdb, smiles_list, npockets=1, exhaustiveness=8,
-               num_modes=3, seed=0, cpu=0, vina_bin=None,
-               blind_box=28.0, blind_spacing=1.0, blind_r=8.0,
-               blind_band=(2.5, 8.0), blind_top_frac=0.06,
-               blind_min_samples=25, blind_eps=2.5,
-               overwrite_receptor=False, verbose=False):
+def blind_dock(receptor_pdb, smiles_list, npockets=1):
+    """Blind-dock a list of ligands into a receptor of unknown binding site.
+
+    Thin agent-facing wrapper over :func:`_blind_dock_impl` exposing only the
+    three arguments an agent should ever need. All pocket-detection and Vina
+    parameters use the validated defaults baked into ``_blind_dock_impl``.
+
+    Args:
+        receptor_pdb: path to a receptor PDB file (binding site unknown).
+        smiles_list: iterable of ligand SMILES strings.
+        npockets: number of top-ranked pockets to dock each ligand into (1).
+            The true site is the #1 pocket on the validated DUD-E set +
+            SULT1A3, so 1 (the default) is fast and usually enough; raise it
+            to 3 for a safety net on a novel receptor.
+
+    Returns:
+        A multi-line string report (see :func:`_blind_dock_impl`). Per-molecule
+        failures are caught and reported, not raised.
+
+    Raises:
+        DockError only for setup failures that affect every molecule (receptor
+        missing, obabel/Vina not found, no pockets detected).
+    """
+    return _blind_dock_impl(receptor_pdb, smiles_list, npockets=npockets)
+
+
+def _blind_dock_impl(receptor_pdb, smiles_list, npockets=1, exhaustiveness=8,
+                     num_modes=3, seed=0, cpu=0, vina_bin=None,
+                     blind_box=28.0, blind_spacing=1.0, blind_r=8.0,
+                     blind_band=(2.5, 8.0), blind_top_frac=0.06,
+                     blind_min_samples=25, blind_eps=2.5,
+                     overwrite_receptor=False, verbose=False):
     """Blind-dock a list of ligands into a receptor of unknown binding site.
 
     A standalone, side-effect-explicit tool for an agent: it detects putative
