@@ -29,7 +29,8 @@ import argparse
 from ollama import Client as OllamaClient
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_MODELS_FILE = os.path.join(_HERE, 'new_models_to_add.txt')
+_ROOT = os.path.dirname(_HERE)  # repo root -- new_models_to_add.txt lives there
+DEFAULT_MODELS_FILE = os.path.join(_ROOT, 'new_models_to_add.txt')
 
 
 # --- Minimal .env loader (verbatim logic from molopt.py) --------------------

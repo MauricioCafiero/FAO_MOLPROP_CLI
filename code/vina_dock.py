@@ -33,6 +33,7 @@ import time
 from types import SimpleNamespace
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+_ROOT = os.path.dirname(HERE)  # repo root -- vina_run_* scratch dirs land here, not in code/
 
 
 class DockError(Exception):
@@ -552,7 +553,7 @@ def main():
     vina_bin = find_vina_bin(args.vina_bin)
     print(f"vina_dock: Vina binary: {vina_bin}")
 
-    work = args.work_dir or os.path.join(HERE, f"vina_run_{time.strftime('%Y-%m-%d_%H-%M-%S')}")
+    work = args.work_dir or os.path.join(_ROOT, f"vina_run_{time.strftime('%Y-%m-%d_%H-%M-%S')}")
     os.makedirs(work, exist_ok=True)
 
     rec_pdb = os.path.abspath(args.receptor)

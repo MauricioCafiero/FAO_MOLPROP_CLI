@@ -30,7 +30,7 @@ refuses to run otherwise. API keys are inherited from the environment (source ~/
 
 Launch detached so a long batch survives the shell (per the long-job pattern in CLAUDE.md):
   source fao-env/bin/activate
-  fao-env/bin/python -c "import subprocess; subprocess.Popen(['fao-env/bin/python','run_replicates.py','--replicates','3'], stdout=open('run_replicates.log','ab'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)"
+  fao-env/bin/python -c "import subprocess; subprocess.Popen(['fao-env/bin/python','code/run_replicates.py','--replicates','3'], stdout=open('run_replicates.log','ab'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)"
 Monitor: tail -f run_replicates.log ; or read manifest.json.
 """
 
@@ -43,9 +43,10 @@ import time
 import argparse
 import subprocess
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
+_HERE = os.path.dirname(os.path.abspath(__file__))  # code/ -- the invoked scripts live here too
+_ROOT = os.path.dirname(_HERE)  # repo root -- where results/ lives
 _PY = sys.executable  # same interpreter (the activated venv's python)
-_DEFAULT_RESULTS_ROOT = os.path.join(_HERE, 'results', 'batches')
+_DEFAULT_RESULTS_ROOT = os.path.join(_ROOT, 'results', 'batches')
 
 # Adversary set definitions: label -> (script, argv template). Model names are substituted
 # from the CLI flags at build time so all sets share one --openai-model / --anthropic-model /
@@ -275,7 +276,7 @@ def main(argv=None) -> int:
             write_manifest(manifest_path, manifest)
             t0 = time.time()
             try:
-                proc = subprocess.run(argv, cwd=_HERE)
+                proc = subprocess.run(argv, cwd=_ROOT)
                 exit_code = proc.returncode
             except Exception as err:
                 print(f"  [launch failed: {err}]", file=sys.stderr)

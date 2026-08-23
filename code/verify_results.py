@@ -53,8 +53,11 @@ def _quiet_stdout():
         sys.stdout = saved
 
 # --- Path + NumPy-2 shim setup (must run before importing the helpers) ------
+# This script lives in code/ alongside docking_module etc. (siblings, no
+# sys.path change needed). _ROOT is the repo root, for data files that live
+# there (results/, molecules.sqlite).
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, 'code'))
+_ROOT = os.path.dirname(_HERE)
 
 # ODDT 0.7 calls np.in1d, removed in NumPy 2.x. np.isin is a drop-in. docking_module
 # shims this too, but set it first so the import order is irrelevant.
@@ -258,7 +261,7 @@ def main(argv=None):
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('md_file', nargs='?', help='molopt.py results .md to verify. '
                    'If omitted, the newest results/*.md is used.')
-    p.add_argument('--db', default=os.path.join(_HERE, 'molecules.sqlite'),
+    p.add_argument('--db', default=os.path.join(_ROOT, 'molecules.sqlite'),
                    help='sqlite DB path (default: ./molecules.sqlite). Created if absent.')
     p.add_argument('--protein', default=None,
                    help='Docking target. Default: parsed from the md header.')
@@ -274,7 +277,7 @@ def main(argv=None):
 
     md_file = args.md_file
     if not md_file:
-        cands = sorted(glob.glob(os.path.join(_HERE, 'results', '*.md')))
+        cands = sorted(glob.glob(os.path.join(_ROOT, 'results', '*.md')))
         if not cands:
             print("No .md found in results/ and no md_file given.", file=sys.stderr)
             return 2

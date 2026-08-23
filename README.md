@@ -59,12 +59,19 @@ runtime bottleneck, not the LLM.
 ## Repository layout
 
 ```
-molopt.py                     # the CLI: Ollama main model + OpenAI/Anthropic adversary
-molopt_oa.py                  # variant: OpenAI <-> Anthropic adversaries (--start selects proposer)
-run_replicates.py             # run N replicates of each adversary set; writes a manifest
-analyze_replicates.py         # compare final compounds across sets/replicates (CSV + stats + plots)
-test_models.py                # smoke-test candidate Ollama cloud models
-verify_results.py             # verify a run's final molecules and store them in sqlite
+code/
+  molopt.py                   # the CLI: Ollama main model + OpenAI/Anthropic adversary
+  molopt_oa.py                # variant: OpenAI <-> Anthropic <-> Gemini adversaries (--start selects proposer)
+  run_replicates.py           # run N replicates of each adversary set; writes a manifest
+  analyze_replicates.py       # compare final compounds across sets/replicates (CSV + stats + plots)
+  test_models.py               # smoke-test candidate Ollama cloud models
+  verify_results.py           # verify a run's final molecules and store them in sqlite
+  vina_dock.py                 # standalone Vina docking harness incl. blind pocket detection
+  _gemini_smoke.py            # one-shot smoke test for GeminiActor tool-calling
+  adversarial_set.md          # starting molecule/score list fed to the model
+  MolPropOp.py                # molecular-property operations (grow/replace/...)
+  docking_module.py           # dockstring docking + SAS/NP scoring
+  mock_tools.py                # --mock-tools synthetic-score stand-in (smoke-test w/o real docking)
 Ollama_MolOpt.ipynb           # original notebook (reference, not deleted)
 new_models_to_add.txt         # candidate cloud model names (with -cloud suffix)
 .env.example                  # copy to .env and fill in API keys
@@ -72,10 +79,6 @@ requirements.txt              # full deps (base + chem stack + LLM SDKs)
 requirements-base.txt         # minimal build deps (setuptools/wheel/six)
 requirements-oddt.txt         # optional: oddt (heavier scientific stack)
 suppressing_rdkit_smiles_errors.md  # drop-in fix to silence RDKit parse logs
-code/
-  adversarial_set.md          # starting molecule/score list fed to the model
-  MolPropOp.py                # molecular-property operations (grow/replace/...)
-  docking_module.py           # dockstring docking + SAS/NP scoring
 HMGCR_dude_receptor_2.pdb      # HMGCR receptor used by the code (selected via RECEPTOR_FILES)
 HMGCR_dude_receptor.pdb        # older copy, kept as a backup; not referenced by the code
 dude_receptor_ADRB1.pdb        # ADRB1 receptor for residue-contact analysis
@@ -84,6 +87,7 @@ MAOB-Dud-e-receptor.pdb        # MAOB receptor for residue-contact analysis
 DRD2_target.pdb                # DRD2 receptor (converted from DRD2_target.pdbqt via Open Babel)
 molecules.sqlite               # accumulated verified molecules + recomputed metrics (created on first run)
 results/                       # timestamped session reports (.md) + JSON message sidecars (.json)
+results/batches/               # replicate-batch output; a separate private repo, gitignored here
 ```
 
 ## Install
@@ -117,7 +121,7 @@ pip install -r requirements.txt
 
 > **Replicate analysis** (`analyze_replicates.py`) also needs matplotlib, which is *not* in
 > `requirements.txt` (it's optional, analysis-only): `pip install matplotlib` in the activated
-> venv. Run a batch with `run_replicates.py`, then `python analyze_replicates.py --batch-dir
+> venv. Run a batch with `code/run_replicates.py`, then `python code/analyze_replicates.py --batch-dir
 > results/batches/<batch_id>`. Add `--skip-docking` to produce all CSVs/plots without the
 > CPU-heavy dockstring recomputation.
 
@@ -147,18 +151,18 @@ Copy `.env.example` to `.env` and fill in keys, **or** export them in your shell
 
 ```bash
 # list the built-in Ollama model set, then run with the default model
-python3 molopt.py --list-models
-python3 molopt.py --protein HMGCR
+python3 code/molopt.py --list-models
+python3 code/molopt.py --protein HMGCR
 
 # specific cloud model (API name, no '-cloud' suffix) with think forced on
-python3 molopt.py --model gemma4:31b --think
+python3 code/molopt.py --model gemma4:31b --think
 
 # Anthropic adversary instead of the default OpenAI one
-python3 molopt.py --model qwen3.5:397b \
+python3 code/molopt.py --model qwen3.5:397b \
   --adversary anthropic --adversary-model claude-haiku-4-5-20251001
 
 # quick chemistry-stack check with no LLM keys
-python3 molopt.py --self-test
+python3 code/molopt.py --self-test
 ```
 
 `molopt_oa.py` is the OpenAI↔Anthropic variant (no Ollama): `--start openai|anthropic`
@@ -166,12 +170,12 @@ picks which provider leads as the tool-calling proposer; the other provider is t
 critique-only adversary. Otherwise the loop and outputs are the same as `molopt.py`.
 
 ```bash
-python3 molopt_oa.py --protein HMGCR --start openai \
+python3 code/molopt_oa.py --protein HMGCR --start openai \
   --openai-model gpt-5.2 --anthropic-model claude-haiku-4-5-20251001
-python3 molopt_oa.py --self-test
+python3 code/molopt_oa.py --self-test
 ```
 
-See `python3 molopt.py --help` / `python3 molopt_oa.py --help` for the full option lists.
+See `python3 code/molopt.py --help` / `python3 code/molopt_oa.py --help` for the full option lists.
 
 ### Key flags
 
@@ -372,16 +376,16 @@ incrementally populated across many runs.
 
 ```bash
 # verify the most recent run (auto-picks newest results/*.md)
-python3 verify_results.py
+python3 code/verify_results.py
 
 # verify a specific run
-python3 verify_results.py results/glm-5.2_HMGCR_2026-06-28_12-44-57.md
+python3 code/verify_results.py results/glm-5.2_HMGCR_2026-06-28_12-44-57.md
 
 # dry-run: just list the SMILES that would be extracted, no docking/DB writes
-python3 verify_results.py results/<run>.md --dry-run
+python3 code/verify_results.py results/<run>.md --dry-run
 
 # change DB path or minimum heavy-atom filter (default 5, filters fragment noise)
-python3 verify_results.py results/<run>.md --db molecules.sqlite --min-heavy-atoms 5
+python3 code/verify_results.py results/<run>.md --db molecules.sqlite --min-heavy-atoms 5
 ```
 
 The protein target is read from the `.md` header (`# protein: ...`), and the
@@ -417,10 +421,10 @@ killed batch loses no completed work (`--force` re-runs all). It refuses to run 
 source fao-env/bin/activate          # required (openbabel bindings + obabel CLI)
 
 # quick: 1 rep of one set, see the commands only
-python run_replicates.py --dry-run --replicates 1 --sets openai_vs_anthropic
+python code/run_replicates.py --dry-run --replicates 1 --sets openai_vs_anthropic
 
 # real batch: 3 reps of all 4 sets. Launch detached so a long batch survives the shell:
-fao-env/bin/python -c "import subprocess; subprocess.Popen(['fao-env/bin/python','run_replicates.py','--replicates','3'], stdout=open('run_replicates.log','ab'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)"
+fao-env/bin/python -c "import subprocess; subprocess.Popen(['fao-env/bin/python','code/run_replicates.py','--replicates','3'], stdout=open('run_replicates.log','ab'), stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)"
 tail -f run_replicates.log
 ```
 
@@ -442,9 +446,9 @@ analyzer calls the extractor per-run independently, so the **same SMILES appeari
 multiple replicates is kept** — that overlap is part of the comparison.
 
 ```bash
-python analyze_replicates.py --batch-dir results/batches/<batch_id>
+python code/analyze_replicates.py --batch-dir results/batches/<batch_id>
 # CPU-light check: RDKit-only metrics + all CSVs/plots, no dockstring recomputation:
-python analyze_replicates.py --batch-dir results/batches/<batch_id> --skip-docking
+python code/analyze_replicates.py --batch-dir results/batches/<batch_id> --skip-docking
 ```
 
 `--skip-docking` leaves the `docking` column blank and skips the docking-dependent
@@ -460,8 +464,8 @@ resolved the same way as `molopt.py` (CLI flags → env → `.env`).
 
 ```bash
 source ~/.zshrc   # for the API keys
-python3 -u test_models.py                       # all models in new_models_to_add.txt
-python3 -u test_models.py --only glm-5.2:cloud  # just one
+python3 -u code/test_models.py                       # all models in new_models_to_add.txt
+python3 -u code/test_models.py --only glm-5.2:cloud  # just one
 ```
 
 ## Notes & caveats
@@ -521,11 +525,11 @@ best-scoring pocket). Per-run intermediates go to a temp dir cleaned at the end.
 
 ```
 # explicit site
-python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' \
+python3 code/vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' \
     --center 9.25 6.17 -7.0 --size 25 25 25
 
 # blind (binding site unknown)
-python3 vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' --blind
+python3 code/vina_dock.py --receptor my_receptor.pdb --smiles 'c1ccc(O)cc1' --blind
 ```
 
 CLI failures raise `DockError`, caught at the entry point into a clean

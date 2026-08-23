@@ -23,9 +23,12 @@ import time
 import argparse
 
 # --- Path + NumPy-2 shim setup (must run before importing the helpers) ------
-# The helpers live in ./code; put that dir on the path.
+# This script now lives in code/ alongside its helpers (MolPropOp, docking_module,
+# mock_tools), so they're importable as siblings -- no sys.path change needed.
+# _ROOT is the repo root (parent of code/), for data files that live there
+# (results/, adversarial_set.md's siblings, etc.).
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, 'code'))
+_ROOT = os.path.dirname(_HERE)
 
 # ODDT 0.7 calls np.in1d, removed in NumPy 2.x. np.isin is a drop-in.
 # docking_module.py also shims this, but we set it first to be safe regardless
@@ -761,7 +764,7 @@ Source ~/.zshrc first if the keys live there.
                         'Given explicitly so an ambient ANTHROPIC_BASE_URL (e.g. a local '
                         'proxy) is bypassed; set this to point at your own proxy if needed.')
 
-    p.add_argument('--context-file', default=os.path.join(_HERE, 'code', 'adversarial_set.md'),
+    p.add_argument('--context-file', default=os.path.join(_HERE, 'adversarial_set.md'),
                    help='Initial molecule/score list (default: code/adversarial_set.md). '
                         'Ignored when --resume is given.')
     p.add_argument('--resume', default=None, metavar='JSON',
@@ -769,7 +772,7 @@ Source ~/.zshrc first if the keys live there.
                         'to the results .md). Skips context-file seeding and the initial '
                         'model turn; continues into the adversary refinement loop from '
                         'the last assistant message already in the sidecar.')
-    p.add_argument('--results-dir', default=os.path.join(_HERE, 'results'),
+    p.add_argument('--results-dir', default=os.path.join(_ROOT, 'results'),
                    help='Where to write the timestamped results .md (default: ./results).')
     p.add_argument('--max-turns', type=int, default=20, help='Safety cap on adversary<->main turns (default: 20).')
     p.add_argument('--max-tool-calls', type=int, default=12,

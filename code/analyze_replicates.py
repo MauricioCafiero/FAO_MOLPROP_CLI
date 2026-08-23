@@ -33,9 +33,9 @@ import json
 import glob
 import argparse
 
-# --- Path + NumPy-2 shim (mirror molopt.py / verify_results.py) ------------
-_HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.join(_HERE, 'code'))
+# --- NumPy-2 shim ------------------------------------------------------------
+# This script lives in code/ alongside docking_module etc., so they're
+# importable as siblings without a sys.path change.
 
 import numpy as np
 if not hasattr(np, "in1d"):
