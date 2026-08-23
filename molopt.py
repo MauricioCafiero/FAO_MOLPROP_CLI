@@ -49,6 +49,7 @@ from docking_module import (  # noqa: F401
     task_specific_prompt,
     task_specific_tools,
 )
+import mock_tools
 
 # Silence RDKit's "SMILES Parse Error" stderr noise. Invalid substituents the
 # model passes are now reported back to it as 'invalid SMILES, skipped' entries
@@ -219,13 +220,45 @@ finished the task and will not propose any more molecules.
 
 # --- Adversary abstraction --------------------------------------------------
 
+# --- API-error classification ------------------------------------------------
+#
+# Both OpenAI and Anthropic SDKs default to max_retries=2 with exponential
+# backoff and a 600s per-call timeout. For a PERMANENT error -- bad auth (401/
+# 403) or an out-of-credits 429 -- that backoff makes the call appear to hang
+# for many minutes at 0% CPU instead of failing fast. So we build both
+# adversary clients with max_retries=0 + an explicit timeout (chat_turn's
+# manual loop handles retries for the Ollama proposer), and refuse to retry
+# errors that can never succeed. Mirrors molopt_oa.py's fail-fast pattern.
+
+_DEFAULT_API_TIMEOUT = 120.0  # seconds per call; well under the SDK's 600s default
+
+
+def _is_retryable(err) -> bool:
+    """True for transient errors worth retrying; False for permanent ones.
+
+    Permanent (do not retry): 401/403 (auth), and a 429 that is actually
+    billing/quota exhaustion (e.g. 'credit_balance_exhausted' /
+    'insufficient_quota') rather than a transient rate limit. Connection
+    errors and 5xx have no status_code and are treated as retryable.
+    """
+    sc = getattr(err, 'status_code', None)
+    if sc in (401, 403):
+        return False
+    if sc == 429:
+        low = str(err).lower()
+        if any(k in low for k in ('credit', 'quota', 'billing', 'insufficient')):
+            return False
+    return True
+
+
 class OpenAIAdversary:
     """OpenAI Responses-API adversary (matches notebook cell 11)."""
 
-    def __init__(self, model: str, api_key: str):
+    def __init__(self, model: str, api_key: str, timeout: float = _DEFAULT_API_TIMEOUT):
         from openai import OpenAI  # lazy import
         self.model = model
-        self.client = OpenAI(api_key=api_key)
+        # max_retries=0: avoid the SDK's minutes-long backoff on a permanent 429/401.
+        self.client = OpenAI(api_key=api_key, timeout=timeout, max_retries=0)
 
     def critique(self, prompt: str) -> str:
         resp = self.client.responses.create(
@@ -239,12 +272,15 @@ class OpenAIAdversary:
 class AnthropicAdversary:
     """Anthropic Messages-API adversary."""
 
-    def __init__(self, model: str, api_key: str, base_url: str = "https://api.anthropic.com"):
+    def __init__(self, model: str, api_key: str, base_url: str = "https://api.anthropic.com",
+                 timeout: float = _DEFAULT_API_TIMEOUT):
         from anthropic import Anthropic  # lazy import
         self.model = model
         # Explicit base_url: bypass any ambient ANTHROPIC_BASE_URL (e.g. a local
         # proxy that doesn't serve Anthropic model names), routing to the real API.
-        self.client = Anthropic(api_key=api_key, base_url=base_url)
+        # max_retries=0 + timeout: avoid the SDK's minutes-long backoff on a permanent 429/401.
+        self.client = Anthropic(api_key=api_key, base_url=base_url,
+                                timeout=timeout, max_retries=0)
 
     def critique(self, prompt: str) -> str:
         resp = self.client.messages.create(
@@ -259,15 +295,17 @@ class AnthropicAdversary:
 
 
 def make_adversary(provider: str, model: str, openai_key: str, anthropic_key: str,
-                   anthropic_base_url: str = "https://api.anthropic.com"):
+                   anthropic_base_url: str = "https://api.anthropic.com",
+                   timeout: float = _DEFAULT_API_TIMEOUT):
     if provider == 'openai':
         if not openai_key:
             raise SystemExit("OpenAI adversary needs --openai-key or OPENAI_API_KEY.")
-        return OpenAIAdversary(model, openai_key)
+        return OpenAIAdversary(model, openai_key, timeout=timeout)
     if provider == 'anthropic':
         if not anthropic_key:
             raise SystemExit("Anthropic adversary needs --anthropic-key or ANTHROPIC_API_KEY.")
-        return AnthropicAdversary(model, anthropic_key, base_url=anthropic_base_url)
+        return AnthropicAdversary(model, anthropic_key, base_url=anthropic_base_url,
+                                  timeout=timeout)
     raise SystemExit(f"Unknown adversary provider: {provider!r} (use 'openai' or 'anthropic').")
 
 
@@ -459,6 +497,8 @@ def chat_turn(messages, prompt, *, ollama, model, think, max_retries, max_tool_c
             except Exception as err:  # connection / transient errors
                 last_err = err
                 _vprint(verbose, f"  [ollama error, attempt {attempt}/{max_retries}: {err}]")
+                if not _is_retryable(err):
+                    raise  # permanent (auth / out-of-credits): fail fast, don't loop
                 if attempt < max_retries:
                     time.sleep(2 * attempt)
         if response is None:
@@ -539,13 +579,15 @@ def run_session(args) -> str:
 
     ollama_key = args.ollama_key or os.environ.get('OLLAMA_API_KEY') or os.environ.get('OLLAMA_KEY') or ''
     headers = {'Authorization': f'Bearer {ollama_key}'} if ollama_key else {}
-    ollama = OllamaClient(host=args.ollama_host, headers=headers)
+    # timeout passed to the ollama Client -> httpx (bounds a hung connection).
+    ollama = OllamaClient(host=args.ollama_host, headers=headers, timeout=args.api_timeout)
 
     adversary = make_adversary(
         args.adversary, args.adversary_model,
         args.openai_key or os.environ.get('OPENAI_API_KEY') or '',
         args.anthropic_key or os.environ.get('ANTHROPIC_API_KEY') or '',
         anthropic_base_url=args.anthropic_base_url or "https://api.anthropic.com",
+        timeout=args.api_timeout,
     )
 
     think = args.think  # already resolved (None -> auto) in main()
@@ -735,6 +777,9 @@ Source ~/.zshrc first if the keys live there.
                         'Prevents a stuck model from looping forever; once hit, the '
                         'model is forced to emit a text response.')
     p.add_argument('--max-retries', type=int, default=3, help='Retries on Ollama connection errors (default: 3).')
+    p.add_argument('--api-timeout', type=float, default=_DEFAULT_API_TIMEOUT,
+                   help=f'Per-call API timeout in seconds for the Ollama + adversary clients '
+                        f'(default: {_DEFAULT_API_TIMEOUT:.0f}; fail-fast on permanent errors).')
     p.add_argument('--quiet', action='store_true', help='Suppress thinking/content/tool prints.')
     p.add_argument('--rdkit-verbose', action='store_true',
                    help='Re-enable RDKit stderr (SMILES Parse Error) logs. They are silenced '
@@ -747,12 +792,19 @@ Source ~/.zshrc first if the keys live there.
 
     p.add_argument('--list-models', action='store_true', help='Print the built-in Ollama model list and exit.')
     p.add_argument('--self-test', action='store_true', help='Run the chemistry tools directly (no LLM keys) and exit.')
+    p.add_argument('--mock-tools', action='store_true',
+                   help='Replace the three docking-dependent tools (grow_cycle, replace_groups, '
+                        'dock_and_get_interacting_residues) with an instant synthetic score, '
+                        'skipping real Vina docking. For smoke-testing the LLM/tool-calling and '
+                        'adversary wiring in seconds instead of minutes/hours -- not for real runs.')
     return p
 
 
 def main(argv=None) -> int:
     load_dotenv()
     args = build_arg_parser().parse_args(argv)
+
+    mock_tools.install(args.mock_tools)
 
     if args.rdkit_verbose:
         RDLogger.EnableLog('rdApp.*')
