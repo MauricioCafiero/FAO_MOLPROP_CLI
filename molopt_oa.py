@@ -37,7 +37,7 @@ import argparse
 import base64
 
 # --- Path + NumPy-2 shim setup (must run before importing the helpers) ------
-# The helpers live in ./code; put that dir on the path like molopt.py / test.py do.
+# The helpers live in ./code; put that dir on the path like molopt.py does.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, 'code'))
 

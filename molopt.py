@@ -23,7 +23,7 @@ import time
 import argparse
 
 # --- Path + NumPy-2 shim setup (must run before importing the helpers) ------
-# The helpers live in ./code; put that dir on the path like test.py does.
+# The helpers live in ./code; put that dir on the path.
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_HERE, 'code'))
 
