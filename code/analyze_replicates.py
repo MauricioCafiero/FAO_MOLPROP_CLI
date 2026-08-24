@@ -455,6 +455,8 @@ def main(argv=None) -> int:
 
     rows = []
     tool_rows = []  # one per rep: tool-call usage from the JSON sidecar
+    stem = batch_id
+    compounds_csv = os.path.join(out_dir, f'compounds_{stem}.csv')
     for e in entries:
         md = e.get('md_path')
         if not md or not os.path.isfile(md):
@@ -495,13 +497,17 @@ def main(argv=None) -> int:
                          f"= {tu['rounds_per_turn']}/turn")
         print(f"  {e['set_label']} rep{e['replicate']}: {len(comps)} compounds{pocket_note}{note}{tool_note}")
 
+        # Checkpoint after every entry: docking (inside extract_run_compounds)
+        # is the expensive, uncached part of this loop, so a killed/reaped
+        # process doesn't throw away every score computed so far.
+        if rows:
+            pd.DataFrame(rows).to_csv(compounds_csv, index=False)
+
     if not rows:
         print("No compounds extracted from any run. Nothing to write.")
         return 0
 
     df = pd.DataFrame(rows)
-    stem = batch_id
-    compounds_csv = os.path.join(out_dir, f'compounds_{stem}.csv')
     summary_csv = os.path.join(out_dir, f'summary_{stem}.csv')
     best_csv = os.path.join(out_dir, f'best_per_replicate_{stem}.csv')
 
