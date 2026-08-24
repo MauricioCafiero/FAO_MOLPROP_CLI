@@ -24,20 +24,20 @@ OUT = os.path.join(BATCHES, "images")
 # (display label, best_per_replicate csv, compounds csv) -- paths relative to BATCHES
 PROPOSERS = [
     ("OpenAI gpt-5.2 / Anthropic haiku-4.5",
-     "e2e_test/analysis_full5_openai/best_per_replicate_e2e_test.csv",
-     "e2e_test/analysis_full5_openai/compounds_e2e_test.csv"),
+     "openai_gpt-5.2_vs_anthropic_5x4/analysis/best_per_replicate_e2e_test.csv",
+     "openai_gpt-5.2_vs_anthropic_5x4/analysis/compounds_e2e_test.csv"),
     ("Anthropic haiku-4.5 / OpenAI gpt-5.2",
-     "e2e_test/analysis_full5_anthropic/best_per_replicate_e2e_test.csv",
-     "e2e_test/analysis_full5_anthropic/compounds_e2e_test.csv"),
+     "anthropic-haiku-4-5_vs_openai_5x4/analysis/best_per_replicate_e2e_test.csv",
+     "anthropic-haiku-4-5_vs_openai_5x4/analysis/compounds_e2e_test.csv"),
     ("Gemini 3-flash / OpenAI gpt-5.2",
-     "gemini-3-flash-preview_vs_openai/analysis_full5/best_per_replicate_gemini-3-flash-preview_vs_openai.csv",
-     "gemini-3-flash-preview_vs_openai/analysis_full5/compounds_gemini-3-flash-preview_vs_openai.csv"),
+     "gemini-3-flash-preview_vs_openai_5x4/analysis_full5/best_per_replicate_gemini-3-flash-preview_vs_openai.csv",
+     "gemini-3-flash-preview_vs_openai_5x4/analysis_full5/compounds_gemini-3-flash-preview_vs_openai.csv"),
     ("kimi k2.6 / OpenAI gpt-5.2",
-     "ollama_kimi-k2.6_vs_openai/analysis_full5/best_per_replicate_ollama_kimi-k2.6_vs_openai.csv",
-     "ollama_kimi-k2.6_vs_openai/analysis_full5/compounds_ollama_kimi-k2.6_vs_openai.csv"),
+     "ollama_kimi-k2.6_vs_openai_5x4/analysis_full5/best_per_replicate_ollama_kimi-k2.6_vs_openai.csv",
+     "ollama_kimi-k2.6_vs_openai_5x4/analysis_full5/compounds_ollama_kimi-k2.6_vs_openai.csv"),
     ("deepseek v4-pro / OpenAI gpt-5.2",
-     "ollama_deepseek-v4-pro_vs_openai/analysis_full5/best_per_replicate_ollama_deepseek-v4-pro_vs_openai.csv",
-     "ollama_deepseek-v4-pro_vs_openai/analysis_full5/compounds_ollama_deepseek-v4-pro_vs_openai.csv"),
+     "ollama_deepseek-v4-pro_vs_openai_5x4/analysis_full5/best_per_replicate_ollama_deepseek-v4-pro_vs_openai.csv",
+     "ollama_deepseek-v4-pro_vs_openai_5x4/analysis_full5/compounds_ollama_deepseek-v4-pro_vs_openai.csv"),
 ]
 
 
