@@ -6,7 +6,8 @@ Refactor of Ollama_MolOpt.ipynb. Runs the same headless loop locally:
   1. An Ollama main model reasons over a molecule/docking-score list and may
      call chemistry tools (grow_cycle, replace_groups, make_random_list,
      related, lipinski, dock_and_get_interacting_residues, calculate_SAS_and_NP).
-  2. An adversary model (OpenAI or Anthropic) critiques each proposal.
+  2. An adversary model (OpenAI, Anthropic, or Ollama -- the last defaults to
+     the same model as the main model, i.e. self-critique) critiques each proposal.
   3. The main model refines until it replies "Done" (or --max-turns is hit).
 
 Every step is appended to a timestamped Markdown file under --results-dir.
@@ -297,9 +298,38 @@ class AnthropicAdversary:
         return "".join(parts).strip()
 
 
+class OllamaAdversary:
+    """Ollama chat adversary: a stateless single-shot critique() call, no tools.
+
+    Used for same-provider self-critique (e.g. kimi proposes+tools, kimi
+    critiques) -- the adversary is a second, independent OllamaClient making
+    one-shot chat() calls, mirroring OpenAIAdversary/AnthropicAdversary's
+    interface exactly so make_adversary() can treat all three uniformly.
+    """
+
+    def __init__(self, model: str, host: str, headers: dict, timeout: float = _DEFAULT_API_TIMEOUT):
+        self.model = model
+        self.client = OllamaClient(host=host, headers=headers, timeout=timeout)
+
+    def critique(self, prompt: str) -> str:
+        # think=False: a critique is meant to be a quick single-shot pass (matching
+        # the OpenAI/Anthropic adversaries, which don't do extended reasoning either)
+        # -- a thinking model like kimi left to think here can blow the API timeout.
+        resp = self.client.chat(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": ADVERSARY_INSTRUCTIONS},
+                {"role": "user", "content": prompt},
+            ],
+            think=False,
+        )
+        return resp.message.content or ''
+
+
 def make_adversary(provider: str, model: str, openai_key: str, anthropic_key: str,
                    anthropic_base_url: str = "https://api.anthropic.com",
-                   timeout: float = _DEFAULT_API_TIMEOUT):
+                   timeout: float = _DEFAULT_API_TIMEOUT,
+                   ollama_host: str = None, ollama_headers: dict = None):
     if provider == 'openai':
         if not openai_key:
             raise SystemExit("OpenAI adversary needs --openai-key or OPENAI_API_KEY.")
@@ -309,7 +339,9 @@ def make_adversary(provider: str, model: str, openai_key: str, anthropic_key: st
             raise SystemExit("Anthropic adversary needs --anthropic-key or ANTHROPIC_API_KEY.")
         return AnthropicAdversary(model, anthropic_key, base_url=anthropic_base_url,
                                   timeout=timeout)
-    raise SystemExit(f"Unknown adversary provider: {provider!r} (use 'openai' or 'anthropic').")
+    if provider == 'ollama':
+        return OllamaAdversary(model, ollama_host, ollama_headers or {}, timeout=timeout)
+    raise SystemExit(f"Unknown adversary provider: {provider!r} (use 'openai', 'anthropic', or 'ollama').")
 
 
 # --- Minimal .env loader (no extra dependency) ------------------------------
@@ -591,6 +623,7 @@ def run_session(args) -> str:
         args.anthropic_key or os.environ.get('ANTHROPIC_API_KEY') or '',
         anthropic_base_url=args.anthropic_base_url or "https://api.anthropic.com",
         timeout=args.api_timeout,
+        ollama_host=args.ollama_host, ollama_headers=headers,
     )
 
     think = args.think  # already resolved (None -> auto) in main()
@@ -727,6 +760,9 @@ Examples:
   # Anthropic adversary instead of the default OpenAI one
   python3 molopt.py --model qwen3.5:397b --adversary anthropic --adversary-model claude-haiku-4-5-20251001
 
+  # Self-critique: kimi proposes+tools, kimi critiques (adversary-model defaults to --model)
+  python3 molopt.py --model kimi-k2.6 --adversary ollama
+
   # Quick chemistry-stack check with no LLM keys
   python3 molopt.py --self-test
 
@@ -753,10 +789,13 @@ Source ~/.zshrc first if the keys live there.
     p.add_argument('--ollama-host', default='https://ollama.com', help='Ollama host (default: https://ollama.com).')
     p.add_argument('--ollama-key', default=None, help='Ollama bearer token (or env OLLAMA_API_KEY).')
 
-    p.add_argument('--adversary', choices=['openai', 'anthropic'], default='openai',
-                   help='Adversary provider (default: openai).')
+    p.add_argument('--adversary', choices=['openai', 'anthropic', 'ollama'], default='openai',
+                   help="Adversary provider (default: openai). 'ollama' critiques with an Ollama "
+                        "model over the same connection as the proposer -- defaults to the same "
+                        "model as --model (self-critique) unless --adversary-model overrides it.")
     p.add_argument('--adversary-model', default=None,
-                   help='Adversary model (default: gpt-5.2 for openai, claude-haiku-4-5-20251001 for anthropic).')
+                   help='Adversary model (default: gpt-5.2 for openai, claude-haiku-4-5-20251001 '
+                        'for anthropic, same as --model for ollama).')
     p.add_argument('--openai-key', default=None, help='OpenAI API key (or env OPENAI_API_KEY).')
     p.add_argument('--anthropic-key', default=None, help='Anthropic API key (or env ANTHROPIC_API_KEY).')
     p.add_argument('--anthropic-base-url', default=None,
@@ -826,7 +865,12 @@ def main(argv=None) -> int:
 
     # Resolve adversary model default per provider.
     if args.adversary_model is None:
-        args.adversary_model = 'gpt-5.2' if args.adversary == 'openai' else 'claude-haiku-4-5-20251001'
+        if args.adversary == 'openai':
+            args.adversary_model = 'gpt-5.2'
+        elif args.adversary == 'anthropic':
+            args.adversary_model = 'claude-haiku-4-5-20251001'
+        else:  # ollama -- self-critique by default (same model both sides)
+            args.adversary_model = args.model
 
     if args.resume:
         if not os.path.isfile(args.resume):

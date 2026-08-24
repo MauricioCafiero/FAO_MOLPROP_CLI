@@ -18,6 +18,11 @@ Adversary sets (each is one (proposer, adversary) pairing):
   anthropic_vs_anthropic molopt_oa.py --start anthropic --adversary anthropic (Anthropic
                           proposes+tools, Anthropic self-critiques -- same self-critique
                           ablation pattern as openai_vs_openai / gemini_vs_gemini)
+  ollama_vs_ollama      molopt.py   --adversary ollama (Ollama proposes+tools, same Ollama
+                          model self-critiques via a second stateless client -- same
+                          self-critique ablation pattern as the *_vs_* sets above; needed
+                          new tooling since molopt.py's --adversary only supported
+                          openai/anthropic before)
 
 For each set, runs --replicates sessions back-to-back. Docking is CPU-bound so runs are
 strictly sequential (no parallelism). Each replicate gets its own --results-dir under
@@ -80,6 +85,10 @@ def build_configs(models):
         'ollama_vs_anthropic': {
             'script': 'molopt.py',
             'args': ['--model', om, '--adversary', 'anthropic', '--adversary-model', ant],
+        },
+        'ollama_vs_ollama': {
+            'script': 'molopt.py',
+            'args': ['--model', om, '--adversary', 'ollama'],
         },
         'gemini_vs_openai': {
             'script': 'molopt_oa.py',
@@ -184,7 +193,7 @@ def main(argv=None) -> int:
                         'non-Gemini sets). Choices: openai_vs_anthropic, openai_vs_openai, '
                         'anthropic_vs_openai, ollama_vs_openai, ollama_vs_anthropic, '
                         'gemini_vs_openai, gemini_vs_anthropic, gemini_vs_gemini, '
-                        'anthropic_vs_anthropic.')
+                        'anthropic_vs_anthropic, ollama_vs_ollama.')
     p.add_argument('--protein', default='HMGCR', help='Docking target (default: HMGCR).')
     p.add_argument('--max-turns', type=int, default=20,
                    help='--max-turns passed to each run (default: 20).')
