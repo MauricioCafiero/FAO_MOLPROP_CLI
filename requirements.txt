@@ -12,3 +12,7 @@ openai
 # optional: only needed by analyze_replicates.py (replicate comparison plots)
 # matplotlib
 
+# optional: only needed by analyze_shot_vs_agentic_stats.py (statistical tests)
+# statsmodels
+# tabulate
+
