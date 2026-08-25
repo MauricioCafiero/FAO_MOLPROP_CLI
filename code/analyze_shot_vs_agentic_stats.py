@@ -1,7 +1,21 @@
 """
 Statistical comparison of zero-shot / few-shot / frag-shot single-call baselines,
-the agentic 5x4 loop (5 proposers common to all four), and the non-LLM GA
-baseline (results/batches/ga_baseline/5x4, 5 replicates, no proposer identity).
+the agentic 5x4 loop (5 proposers common to all four), and two non-LLM GA
+baselines (results/batches/ga_baseline/5x4 and 5x4_full, 5 replicates each,
+no proposer identity).
+
+Two GA baselines, not one: the GA's substituent pool must match whichever
+LLM condition it's being held up against, or a score gap could just reflect
+one condition having a bigger chemical space to search, not a better search
+strategy (see GA_BASELINE_EXPLAINER.md "Two substituent pools: frag10 vs
+full"). `ga_frag10` (5x4) is restricted to the exact 10 fragments frag-shot's
+prompt showed the LLM -- the intended comparison is ga_frag10 vs frag. `ga_full`
+(5x4_full) searches the full ~390-item combined pool -- the intended
+comparison is ga_full vs zero, since zero-shot's prompt shows the LLM no
+fragment menu at all. Both are still included in every pooled/omnibus test
+below for completeness, but only those two pairings are pool-matched by
+design; other GA pairwise rows (e.g. ga_frag10 vs zero, ga_full vs frag) are
+reported but weren't designed for a fair chemical-space comparison.
 
 Unit-of-analysis discipline:
   - compound-level rows are NOT independent (multiple compounds share a replicate,
@@ -10,9 +24,9 @@ Unit-of-analysis discipline:
     with proposer as a blocking/random-effect variable.
   - Compound-level tests are reported as a secondary/liberal lens only, explicitly
     flagged as pseudoreplicated.
-  - The GA baseline has no proposer dimension (it's one system, not five), so it's
-    included in every condition-pooled test (KW, pairwise MW-U, good-lead GEE,
-    compound-level KW) but excluded from the proposer-BLOCKED tests (Friedman,
+  - The GA baselines have no proposer dimension (each is one system, not five), so
+    they're included in every condition-pooled test (KW, pairwise MW-U, good-lead
+    GEE, compound-level KW) but excluded from the proposer-BLOCKED tests (Friedman,
     paired Wilcoxon, the proposer-random-intercept mixed model) -- those require
     the same 5 units observed under every condition, which GA doesn't satisfy.
 
@@ -41,7 +55,10 @@ SOURCES = {
     "frag":  f"{ROOT}/frag_shot/analysis/compounds_frag_shot.csv",
 }
 
-GA_SOURCE = f"{ROOT}/ga_baseline/5x4/analysis/compounds_ga_5x4.csv"
+GA_SOURCES = {
+    "ga_frag10": f"{ROOT}/ga_baseline/5x4/analysis/compounds_ga_5x4.csv",
+    "ga_full":   f"{ROOT}/ga_baseline/5x4_full/analysis/compounds_ga_5x4_full.csv",
+}
 
 AGENTIC = {
     "openai":     f"{ROOT}/openai_gpt-5.2_vs_anthropic_5x4/analysis/compounds_e2e_test.csv",
@@ -76,10 +93,10 @@ def load_agentic():
         frames.append(df[["proposer", "condition", "replicate", "docking", "docked_in_pocket"]])
     return pd.concat(frames, ignore_index=True)
 
-def load_ga():
-    df = pd.read_csv(GA_SOURCE)
-    df["proposer"] = "ga"
-    df["condition"] = "ga"
+def load_ga(condition):
+    df = pd.read_csv(GA_SOURCES[condition])
+    df["proposer"] = condition
+    df["condition"] = condition
     return df[["proposer", "condition", "replicate", "docking", "docked_in_pocket"]]
 
 def good_lead(row):
@@ -88,15 +105,17 @@ def good_lead(row):
 def main():
     baseline = pd.concat([load_baseline(c) for c in SOURCES], ignore_index=True)
     agentic = load_agentic()
-    ga = load_ga()
-    df = pd.concat([baseline, agentic, ga], ignore_index=True)
+    ga_frag10 = load_ga("ga_frag10")
+    ga_full = load_ga("ga_full")
+    df = pd.concat([baseline, agentic, ga_frag10, ga_full], ignore_index=True)
     n_before = len(df)
     df = df[df["docking"].notna()].copy()
     if len(df) != n_before:
         print(f"(dropped {n_before - len(df)} compound row(s) with missing docking score before analysis)\n")
     df["docked_in_pocket"] = df["docked_in_pocket"].astype(str).str.lower().isin(["true", "1"])
     df["good_lead"] = df.apply(good_lead, axis=1).astype(int)
-    df["condition"] = pd.Categorical(df["condition"], categories=["zero", "frag", "few", "agentic", "ga"], ordered=True)
+    df["condition"] = pd.Categorical(
+        df["condition"], categories=["zero", "frag", "few", "agentic", "ga_frag10", "ga_full"], ordered=True)
 
     # ---------- replicate-level aggregation ----------
     rep = df.groupby(["proposer", "condition", "replicate"], observed=True).agg(
@@ -106,22 +125,25 @@ def main():
         good_lead_rate=("good_lead", "mean"),
     ).reset_index()
 
-    print("# Statistical comparison: zero / frag / few-shot vs. agentic 5x4\n")
+    print("# Statistical comparison: zero / frag / few-shot vs. agentic 5x4 vs. GA baselines\n")
     print(f"n replicates per condition (pooled over 5 proposers): "
           f"{rep.groupby('condition', observed=True).size().to_dict()}\n")
 
-    print("## 1. Primary test — replicate-level mean docking score, all 5 conditions pooled\n")
-    print("Kruskal-Wallis across all 5 conditions (unit = one replicate's mean docking score, "
-          f"n={len(rep)} replicates; zero/frag/few/agentic pooled over 5 proposers, ga is its own "
-          "5 replicates with no proposer dimension):\n")
+    print("## 1. Primary test — replicate-level mean docking score, all 6 conditions pooled\n")
+    print("Kruskal-Wallis across all 6 conditions (unit = one replicate's mean docking score, "
+          f"n={len(rep)} replicates; zero/frag/few/agentic pooled over 5 proposers, ga_frag10/ga_full "
+          "are each their own 5 replicates with no proposer dimension):\n")
     groups = [g["mean_docking"].values for _, g in rep.groupby("condition", observed=True)]
     h, p = stats.kruskal(*groups)
     print(f"- H = {h:.3f}, p = {p:.2e}\n")
 
     print("### Pairwise Mann-Whitney U (Holm-corrected), replicate mean docking\n")
+    print("Rows in **bold** are the two pool-matched GA comparisons this baseline was designed for "
+          "(ga_frag10 vs frag, ga_full vs zero); other GA rows are reported for completeness but the "
+          "GA's chemical space wasn't matched to those specific conditions.\n")
     print("| Comparison | n1 | n2 | U | raw p | Holm-adj p | rank-biserial r (effect size) |")
     print("|---|---:|---:|---:|---:|---:|---:|")
-    conds = ["zero", "frag", "few", "agentic", "ga"]
+    conds = ["zero", "frag", "few", "agentic", "ga_frag10", "ga_full"]
     pairs = list(itertools.combinations(conds, 2))
     raw_ps = []
     stats_cache = []
@@ -141,15 +163,17 @@ def main():
         adj = min(1.0, raw_ps[idx] * (m - rank))
         running_max = max(running_max, adj)
         adj_ps[idx] = running_max
+    pool_matched = {frozenset(("frag", "ga_frag10")), frozenset(("zero", "ga_full"))}
     for (a, b, n1, n2, u, p_, r), adj in zip(stats_cache, adj_ps):
-        print(f"| {a} vs {b} | {n1} | {n2} | {u:.1f} | {p_:.2e} | {adj:.2e} | {r:+.2f} |")
+        label = f"**{a} vs {b}**" if frozenset((a, b)) in pool_matched else f"{a} vs {b}"
+        print(f"| {label} | {n1} | {n2} | {u:.1f} | {p_:.2e} | {adj:.2e} | {r:+.2f} |")
     print()
 
     print("## 2. Design-matched test — Friedman (proposer as block, n=5 proposers)\n")
-    print("Restricted to zero/frag/few/agentic -- the GA baseline has no proposer dimension "
-          "(it's one system run 5 times, not 5 proposers each run once), so it can't be a block "
-          "in a proposer-matched design and is excluded from this test and §3's mixed model. "
-          "It's already covered by §1's pooled tests above.\n")
+    print("Restricted to zero/frag/few/agentic -- the GA baselines have no proposer dimension "
+          "(each is one system run 5 times, not 5 proposers each run once), so neither can be a block "
+          "in a proposer-matched design and both are excluded from this test and §3's mixed model. "
+          "They're already covered by §1's pooled tests above.\n")
     print("Uses each proposer's mean-of-replicate-means per condition, so proposer identity "
           "(the strongest confound: proposers differ far more than conditions within a proposer) "
           "is controlled for by construction.\n")
@@ -172,13 +196,13 @@ def main():
     print()
 
     print("## 3. Linear mixed-effects model — replicate-level, proposer as random intercept\n")
-    print("Restricted to zero/frag/few/agentic for the same reason as §2 (GA has no proposer to "
-          "supply a random intercept for).\n")
+    print("Restricted to zero/frag/few/agentic for the same reason as §2 (GA baselines have no "
+          "proposer to supply a random intercept for).\n")
     print("`mean_docking ~ C(condition, Treatment('agentic')) + (1 | proposer)`, "
           "unit = replicate (n=25/condition for zero/few/agentic, n=24 for frag [deepseek frag-shot rep3 extraction miss]). "
           "Coefficients are kcal/mol relative to agentic; negative-going coefficient = single-shot condition scored WORSE "
           "(less negative docking) than agentic.\n")
-    model_df = rep[rep.condition != "ga"].copy()
+    model_df = rep[~rep.condition.isin(["ga_frag10", "ga_full"])].copy()
     model_df["condition"] = model_df["condition"].astype(str)
     md = smf.mixedlm("mean_docking ~ C(condition, Treatment('agentic'))", model_df, groups=model_df["proposer"])
     fit = md.fit(reml=True)
@@ -189,10 +213,11 @@ def main():
     print("## 4. Good-lead rate (binary, compound-level) — GEE with exchangeable within-replicate correlation\n")
     print("`good_lead ~ condition`, family=Binomial, clustered by (proposer, replicate) to respect "
           "non-independence of compounds proposed in the same call. Odds ratios relative to agentic. "
-          "GA included as a 5th level -- this test doesn't need a proposer dimension.\n")
+          "Both GA baselines included as separate levels -- this test doesn't need a proposer dimension.\n")
     gee_df = df.copy()
     gee_df["cluster"] = gee_df["proposer"].astype(str) + "_" + gee_df["condition"].astype(str) + "_" + gee_df["replicate"].astype(str)
-    gee_df["condition"] = pd.Categorical(gee_df["condition"], categories=["agentic", "zero", "frag", "few", "ga"])
+    gee_df["condition"] = pd.Categorical(
+        gee_df["condition"], categories=["agentic", "zero", "frag", "few", "ga_frag10", "ga_full"])
     fam = Binomial()
     ind = Exchangeable()
     gee_model = GEE.from_formula("good_lead ~ C(condition, Treatment('agentic'))", groups="cluster", data=gee_df, family=fam, cov_struct=ind)
@@ -200,6 +225,21 @@ def main():
     print("```")
     print(gee_fit.summary())
     print("```\n")
+
+    # flag any condition with 0 or 100% good-lead compounds at the compound level:
+    # that produces quasi-complete separation, and the corresponding coefficient/CI
+    # above is a numerical artifact (drifts to +-inf), not a meaningful effect size.
+    lead_counts = gee_df.groupby("condition", observed=True)["good_lead"].agg(["sum", "count"])
+    degenerate = lead_counts[(lead_counts["sum"] == 0) | (lead_counts["sum"] == lead_counts["count"])]
+    if len(degenerate):
+        print("**Note — quasi-complete separation:** the following condition(s) have 0 or 100% "
+              "good-lead compounds, which drives their GEE coefficient toward +-infinity above; "
+              "treat those specific rows as \"no good leads observed\" / \"all good leads\", not as a "
+              "precise odds ratio:\n")
+        for cond, row in degenerate.iterrows():
+            print(f"- {cond}: {int(row['sum'])}/{int(row['count'])} good-lead compounds")
+        print()
+
     print("Odds ratios (exp(coef)):\n")
     for name, coef in gee_fit.params.items():
         if name == "Intercept":

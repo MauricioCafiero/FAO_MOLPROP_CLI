@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
 """
 run_ga_baseline.py - Non-LLM baseline: a small population-based genetic
-algorithm over the same fragment vocabulary (base rings + electron-
-withdrawing/donating substituents, with/without linkers) already defined in
-MolPropOp.py -- the vocabulary code/adversarial_set.md was combinatorially
-enumerated from and the frag-shot baseline (ZERO_FEW_SHOT_BASELINE.md) draws
-its ring/functional-group menu from.
+algorithm over the same base-ring vocabulary already defined in MolPropOp.py
+(the vocabulary code/adversarial_set.md was combinatorially enumerated from),
+paired with one of two substituent menus selected via --pool (see below).
 
 Purpose: every other baseline in this study (zero/few/frag-shot, the agentic
 loop) is an LLM proposing molecules. This one isn't -- it's a classic
@@ -18,13 +16,22 @@ evaluation budget would say the loop's gain is mostly generic feedback-driven
 search; a GA that falls well short would say the LLM's chemical judgment is
 doing real work beyond just having a scored feedback loop.
 
+--pool controls which chemical space the GA can search, so the comparison
+stays apples-to-apples with whichever condition it's being set against:
+'frag10' (default) restricts it to the exact 10 fragments frag-shot's prompt
+showed the LLM, so a GA-vs-frag-shot gap reflects search strategy, not a
+bigger available chemical space. 'full' opens up the entire combined
+e_withdraw/e_donate(+linker) pool (~390 items), for comparison against
+zero-shot, which was never shown a fragment menu at all -- there, frag10
+would be the artificial handicap instead.
+
 Genome: (ring_index, {position: substituent_smiles}) -- one of the 9
 MolPropOp.base_rings plus 0..min(3, len(clean positions)) substituents drawn
-from the combined e_withdraw/e_donate(+linker) pool, placed at MolPropOp's
-pre-defined "clean" (symmetrically unique) ring positions. Built into a SMILES
-string the same way MolPropOp.sub_cycle does (splice substituents into the
-ring SMILES at each clean position, highest position index first so earlier
-indices stay valid), then validated with RDKit.
+from the selected --pool, placed at MolPropOp's pre-defined "clean"
+(symmetrically unique) ring positions. Built into a SMILES string the same
+way MolPropOp.sub_cycle does (splice substituents into the ring SMILES at
+each clean position, highest position index first so earlier indices stay
+valid), then validated with RDKit.
 
 Fitness: real dockstring/Vina docking score via docking_module.scoring_function
 -- the identical scorer every other batch in this study uses -- with results
@@ -52,9 +59,10 @@ multi-hour step in this pipeline and a killed/reaped process should not lose
 completed work (see project memory on this exact failure mode).
 
 Usage:
-  fao-env/bin/python code/run_ga_baseline.py --preset 5x4 --replicates 5
+  fao-env/bin/python code/run_ga_baseline.py --preset 5x4 --replicates 5                     # vs. frag-shot (default pool=frag10)
   fao-env/bin/python code/run_ga_baseline.py --preset 10x8 --replicates 3
-  fao-env/bin/python code/run_ga_baseline.py --preset 5x4 --replicates 1 --skip-docking   # smoke test, no Vina calls
+  fao-env/bin/python code/run_ga_baseline.py --preset 5x4 --replicates 5 --pool full          # vs. zero-shot
+  fao-env/bin/python code/run_ga_baseline.py --preset 5x4 --replicates 1 --skip-docking       # smoke test, no Vina calls
 """
 import argparse
 import csv
@@ -80,7 +88,37 @@ from MolPropOp import (  # noqa: E402
     withdraw_with_linkers, donate_with_linkers,
 )
 
-SUBSTITUENT_POOL = e_withdraw + e_donate + withdraw_with_linkers + donate_with_linkers
+# Two substituent menus, selected via --pool:
+#
+# 'frag10' (default) -- the exact 10-item functional-group menu shown to the
+# LLM in run_zero_few_shot.py's FRAG_SHOT_SYSTEM prompt (itself a fixed sample
+# drawn from the 'full' pool below). Use this to compare against frag-shot:
+# holding rings AND fragments identical isolates search-with-feedback vs.
+# static LLM reasoning as the only difference. Using the full pool there would
+# let a GA-vs-frag-shot score gap just reflect a larger accessible substituent
+# space instead.
+#
+# 'full' -- the entire combined e_withdraw/e_donate(+linker) pool (~390
+# items). Use this to compare against zero-shot, which was never shown any
+# fragment menu at all -- there, constraining the GA to 10 items would be the
+# artificial handicap.
+FRAG10_SUBSTITUENTS = [
+    'I',
+    'C#N',
+    'C(=O)O(C(C)C)',
+    'C#C(SC)',
+    'C(C(=O)[O-])',
+    'C(C)',
+    'C=C([N+](=O)[O-])',
+    'C(N)',
+    'C([O-])',
+    'CC(N(C)C)',
+]
+POOLS = {
+    'frag10': FRAG10_SUBSTITUENTS,
+    'full': e_withdraw + e_donate + withdraw_with_linkers + donate_with_linkers,
+}
+SUBSTITUENT_POOL = POOLS['frag10']  # overwritten in main() per --pool
 MAX_SUBS = 3  # cap substituents per genome, regardless of how many clean positions a ring has
 
 PRESETS = {
@@ -313,17 +351,29 @@ def main(argv=None):
     p.add_argument('--mutation-rate', type=float, default=0.7)
     p.add_argument('--tournament-k', type=int, default=2)
     p.add_argument('--elitism', type=int, default=1)
+    p.add_argument('--pool', choices=list(POOLS), default='frag10',
+                    help="'frag10' (default): the exact 10-fragment menu shown to the LLM in "
+                         "frag-shot -- use for the GA-vs-frag-shot comparison. 'full': the entire "
+                         "~390-item combined substituent pool -- use for the GA-vs-zero-shot "
+                         "comparison, where no fragment menu was shown to the LLM either.")
     p.add_argument('--skip-docking', action='store_true',
                     help='CPU-light wiring check: build/mutate genomes but skip the real Vina call')
     p.add_argument('--out-dir', default=None,
-                    help='default: results/batches/ga_baseline/<preset>/analysis')
+                    help='default: results/batches/ga_baseline/<preset>[_<pool> if not frag10]/analysis')
     args = p.parse_args(argv)
+
+    global SUBSTITUENT_POOL
+    SUBSTITUENT_POOL = POOLS[args.pool]
 
     pop = args.pop or PRESETS[args.preset]['pop']
     gens = args.gens or PRESETS[args.preset]['gens']
-    set_label = f'ga_{args.preset}'
+    # frag10 keeps the original ga_<preset> naming (existing analysis scripts
+    # reference this path directly); full gets a distinct suffix so it never
+    # collides with or overwrites the frag10 run.
+    preset_dir = args.preset if args.pool == 'frag10' else f'{args.preset}_{args.pool}'
+    set_label = f'ga_{preset_dir}'
 
-    out_dir = args.out_dir or os.path.join(_ROOT, 'results', 'batches', 'ga_baseline', args.preset, 'analysis')
+    out_dir = args.out_dir or os.path.join(_ROOT, 'results', 'batches', 'ga_baseline', preset_dir, 'analysis')
     os.makedirs(out_dir, exist_ok=True)
     out_csv = os.path.join(out_dir, f'compounds_{set_label}.csv')
     log_csv = os.path.join(out_dir, f'ga_eval_log_{set_label}.csv')
@@ -355,7 +405,8 @@ def main(argv=None):
         log_writer.writeheader()
     log_f.flush()
 
-    print(f"GA baseline: preset={args.preset} pop={pop} gens={gens} replicates={args.replicates} "
+    print(f"GA baseline: preset={args.preset} pool={args.pool} ({len(SUBSTITUENT_POOL)} substituents) "
+          f"pop={pop} gens={gens} replicates={args.replicates} "
           f"protein={args.protein} skip_docking={args.skip_docking}")
     print(f"Delivered-compounds CSV: {out_csv}")
     print(f"Full evaluation log (checkpointed per dock call): {log_csv}")
