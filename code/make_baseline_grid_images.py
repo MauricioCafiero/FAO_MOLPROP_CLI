@@ -27,13 +27,22 @@ _HERE = os.path.dirname(os.path.abspath(__file__))  # code/
 _ROOT = os.path.dirname(_HERE)  # repo root
 BATCHES = os.path.join(_ROOT, "results", "batches")
 
-LABELS = ["openai", "anthropic", "gemini", "kimi-k2.6", "deepseek-v4-pro"]
+LABELS = ["openai", "anthropic", "gemini", "kimi-k2.6", "deepseek-v4-pro",
+          "gemma4", "glm-5.2", "nemotron-3-ultra", "nemotron-3-super",
+          "nemotron-3-nano", "gpt-oss-20b", "gpt-oss-120b"]
 DISPLAY = {
     "openai": "OpenAI gpt-5.2",
     "anthropic": "Anthropic haiku-4.5",
     "gemini": "Gemini 3-flash",
     "kimi-k2.6": "kimi k2.6",
     "deepseek-v4-pro": "deepseek v4-pro",
+    "gemma4": "gemma4",
+    "glm-5.2": "glm-5.2",
+    "nemotron-3-ultra": "nemotron-3-ultra",
+    "nemotron-3-super": "nemotron-3-super",
+    "nemotron-3-nano": "nemotron-3-nano",
+    "gpt-oss-20b": "gpt-oss:20b",
+    "gpt-oss-120b": "gpt-oss:120b",
 }
 
 
@@ -48,7 +57,7 @@ def read_csv(path):
 
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument("--shot", choices=["zero", "few"], required=True)
+    p.add_argument("--shot", choices=["zero", "few", "frag"], required=True)
     args = p.parse_args()
 
     shot_dir = f"{args.shot}_shot"

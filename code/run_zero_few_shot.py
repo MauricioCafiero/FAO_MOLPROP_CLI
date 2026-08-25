@@ -2,7 +2,8 @@
 """
 run_zero_few_shot.py - Non-agentic baseline: single-shot molecule generation
 (no tools, no adversary, no multi-turn refinement) across all 5 proposers used
-elsewhere in this study, for both zero-shot and few-shot prompting.
+elsewhere in this study, for zero-shot, few-shot, and fragment-suggested
+zero-shot prompting.
 
 Ported from GPT_ANT_zero-shot.py / GPT_ANT_ONE_SHOT.py (prototypes that covered
 only OpenAI + Anthropic, and whose few-shot prompt was wired to an unrelated
@@ -18,18 +19,22 @@ HMGCR docking task used throughout the rest of the study:
              plus that file's own "learn trends, then propose" scaffolding;
              the user message is the full code/adversarial_set.md molecule/
              docking-score list -- verbatim from GPT_ANT_ONE_SHOT.py.
+  frag-shot: same task framing and bare-protein-name user message as
+             zero-shot, but the system prompt also suggests a fixed set of
+             base rings and functional groups to build molecules from.
 
 Each (shot-type, model, replicate) is a single API call: no tools, no critique,
 no loop. Output is written to match the existing per-batch convention exactly
-(results/batches/<zero_shot|few_shot>/<model>/rep<N>/<...>.md + .json sidecar
-+ a manifest.json at the zero_shot/few_shot level) so
-`analyze_replicates.py --batch-dir results/batches/zero_shot` (or few_shot)
-works completely unmodified -- same real-Vina-redock analysis as every
-agentic run in this study.
+(results/batches/<zero_shot|few_shot|frag_shot>/<model>/rep<N>/<...>.md + .json
+sidecar + a manifest.json at the zero_shot/few_shot/frag_shot level) so
+`analyze_replicates.py --batch-dir results/batches/zero_shot` (or few_shot /
+frag_shot) works completely unmodified -- same real-Vina-redock analysis as
+every agentic run in this study.
 
 Usage:
   python3 code/run_zero_few_shot.py --shot zero --replicates 5
   python3 code/run_zero_few_shot.py --shot few --replicates 5
+  python3 code/run_zero_few_shot.py --shot frag --replicates 5
   python3 code/run_zero_few_shot.py --shot zero --replicates 1 --models openai,gemini
 """
 import os
@@ -60,6 +65,17 @@ MODELS = {
     'gemini': ('gemini', GEMINI_DEFAULT_MODEL),
     'kimi-k2.6': ('ollama', 'kimi-k2.6'),
     'deepseek-v4-pro': ('ollama', 'deepseek-v4-pro'),
+    # Additional Ollama-cloud-only proposers (no agentic-loop role in this study,
+    # baselines only). API names verified to resolve via a direct ollama.chat()
+    # smoke call before adding here; 'gpt-oss-*' labels differ from their model
+    # tags (which contain ':') purely for a cleaner --models CLI value / filename.
+    'gemma4': ('ollama', 'gemma4'),
+    'glm-5.2': ('ollama', 'glm-5.2'),
+    'nemotron-3-ultra': ('ollama', 'nemotron-3-ultra'),
+    'nemotron-3-super': ('ollama', 'nemotron-3-super'),
+    'nemotron-3-nano': ('ollama', 'nemotron-3-nano:30b'),
+    'gpt-oss-20b': ('ollama', 'gpt-oss:20b'),
+    'gpt-oss-120b': ('ollama', 'gpt-oss:120b'),
 }
 
 
@@ -71,6 +87,39 @@ You will deliver up to five potential molecules in SMILES format, along with rea
 and an estimate of their docking scores.
 '''
 ZERO_SHOT_USER = 'HMGCR'
+
+# zero-shot, but with a fixed set of suggested rings/functional groups to build
+# from -- same task framing as ZERO_SHOT_SYSTEM, same bare-protein-name user
+# message, just with fragment suggestions appended to the system prompt.
+FRAG_SHOT_SYSTEM = '''# You are a drug design assistant. Your task is to design a new molecules
+with the best possible docking score (the most negative) to a particular protein target, given in the first user message.
+You will deliver up to five potential molecules in SMILES format, along with reasoning for why you chose those molecules
+and an estimate of their docking scores.
+
+## The following are SMILES for rings that you should use as the base of your molecules:
+- 'c1ccccc1', #benzene
+- 'n1ccccc1', #pyridine
+- 'o1cccc1',  #furan
+- 's1cccc1',  #thiophene
+- '[nH]1cccc1', #pyrrole
+- 'n1c[nH]cc1', #imidazole
+- 'c1ccc2ccccc2c1', #naphthalene
+- 'c1ccc2cc3ccccc3cc2c1', #anthracene
+- 'O=c1cc(-c2ccccc2)oc2ccccc12' #flavone
+
+## The following are SMILES for functional groups that you may use to modify the rings; you may also choose to use other functional groups:
+- I
+- C#N
+- C(=O)O(C(C)C)
+- C#C(SC)
+- C(C(=O)[O-])
+- C(C)
+- C=C([N+](=O)[O-])
+- C(N)
+- C([O-])
+- CC(N(C)C)
+'''
+FRAG_SHOT_USER = 'HMGCR'
 
 # Verbatim structure from GPT_ANT_ONE_SHOT.py, with the docking prompt
 # (task_specific_prompt) swapped in for the file's unused HL_task_specific_prompt.
@@ -159,7 +208,14 @@ def call_gemini(model, system, user, api_key, timeout=_DEFAULT_API_TIMEOUT):
 # fix already proven for kimi-k2.6 on the adversary/critique path (see
 # OllamaAdversary.critique() in molopt.py). deepseek-v4-pro has been
 # reliable with think=True (5/5 zero+few shot, no timeouts) so stays as-is.
-NO_THINK_LABELS = {'kimi-k2.6'}
+# The 7 newer Ollama-only labels default to NO_THINK too: their think=True
+# single-call latency hasn't been characterized, and a 3-shot x 5-rep batch
+# (105 calls) is too large to risk an unpredictable multi-minute hang on an
+# unverified model. Revisit per-label if think=True is specifically wanted.
+NO_THINK_LABELS = {
+    'kimi-k2.6', 'gemma4', 'glm-5.2', 'nemotron-3-ultra', 'nemotron-3-super',
+    'nemotron-3-nano', 'gpt-oss-20b', 'gpt-oss-120b',
+}
 
 
 def call_ollama(model, system, user, host, headers, think=True,
@@ -234,8 +290,12 @@ def run_batch(shot, replicates, labels, results_root, quiet=False):
         'gemini': os.environ.get('GEMINI_API_KEY') or '',
         'ollama': os.environ.get('OLLAMA_API_KEY') or os.environ.get('OLLAMA_KEY') or '',
     }
-    system = ZERO_SHOT_SYSTEM if shot == 'zero' else FEW_SHOT_SYSTEM
-    user = ZERO_SHOT_USER if shot == 'zero' else _few_shot_user()
+    if shot == 'zero':
+        system, user = ZERO_SHOT_SYSTEM, ZERO_SHOT_USER
+    elif shot == 'frag':
+        system, user = FRAG_SHOT_SYSTEM, FRAG_SHOT_USER
+    else:
+        system, user = FEW_SHOT_SYSTEM, _few_shot_user()
 
     batch_dir = os.path.join(results_root, f'{shot}_shot')
     os.makedirs(batch_dir, exist_ok=True)
@@ -289,7 +349,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(
         prog='run_zero_few_shot.py',
         description='Non-agentic zero-shot / few-shot baseline across all 5 proposers.')
-    p.add_argument('--shot', choices=['zero', 'few'], required=True,
+    p.add_argument('--shot', choices=['zero', 'few', 'frag'], required=True,
                    help='Which prompting mode to run.')
     p.add_argument('--replicates', type=int, default=5,
                    help='Replicates per model (default: 5).')
