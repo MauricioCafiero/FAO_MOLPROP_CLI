@@ -242,10 +242,10 @@ def tool_usage_from_sidecar(sidecar_path):
     Returns a dict {n_turns, total_tool_rounds, total_tool_calls, n_docks,
     rounds_per_turn, calls_per_turn} or None if the sidecar can't be read.
     A 'tool round' = one assistant message that carried >=1 tool call (each
-    such message is a separate API round-trip). n_turns = number of proposer
-    turns = count of non-tool-result user messages (the seed prompt + each
-    adversary-feedback prompt), which is written_at_turn + 1 (the sidecar's
-    written_at_turn excludes the initial seed turn).
+    such message is a separate API round-trip). n_turns = number of
+    adversary-refinement turns, directly comparable to molopt_oa.py's
+    --max-turns cap (the initial seed response is not counted, matching the
+    sidecar's written_at_turn).
     """
     try:
         with open(sidecar_path) as f:
@@ -253,9 +253,11 @@ def tool_usage_from_sidecar(sidecar_path):
     except Exception:
         return None
     msgs = d.get('messages') or []
-    n_turns = sum(1 for m in msgs
-                  if m.get('role') == 'user' and not _is_tool_result_user(m))
-    if not n_turns:  # fall back to the sidecar's own counter
+    n_proposer = sum(1 for m in msgs
+                     if m.get('role') == 'user' and not _is_tool_result_user(m))
+    # Seed prompt + refinement prompts; the cap only bounds refinements.
+    n_turns = max(n_proposer - 1, 0)
+    if not n_proposer:  # fall back to the sidecar's own counter
         n_turns = d.get('written_at_turn') or 0
     rounds = calls = docks = 0
     for m in msgs:
@@ -272,8 +274,8 @@ def tool_usage_from_sidecar(sidecar_path):
         'total_tool_rounds': rounds,
         'total_tool_calls': calls,
         'n_docks': docks,
-        'rounds_per_turn': round(rounds / n_turns, 2) if n_turns else None,
-        'calls_per_turn': round(calls / n_turns, 2) if n_turns else None,
+        'rounds_per_turn': round(rounds / n_proposer, 2) if n_proposer else None,
+        'calls_per_turn': round(calls / n_proposer, 2) if n_proposer else None,
     }
 
 
