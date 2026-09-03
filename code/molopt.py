@@ -235,6 +235,10 @@ finished the task and will not propose any more molecules.
 # errors that can never succeed. Mirrors molopt_oa.py's fail-fast pattern.
 
 _DEFAULT_API_TIMEOUT = 120.0  # seconds per call; well under the SDK's 600s default
+# A connection failure is retried max_retries times, then the round is retried with the
+# error surfaced to the model. Bound THAT too: a provider outage would otherwise loop
+# here indefinitely (silently, under --quiet), wedging a whole batch on one replicate.
+_MAX_STALL_CYCLES = 3
 
 
 def _is_retryable(err) -> bool:
@@ -511,6 +515,7 @@ def chat_turn(messages, prompt, *, ollama, model, think, max_retries, max_tool_c
 
     trace = []  # captured thinking/content/tool-call lines, returned for --trace
     tool_rounds = 0
+    stall_cycles = 0  # consecutive rounds where every attempt failed to connect
     while True:
         # Once the cap is hit, drop the tools so the model must emit text.
         force_tools = [] if tool_rounds >= max_tool_calls else TOOL_FUNCTIONS
@@ -537,13 +542,24 @@ def chat_turn(messages, prompt, *, ollama, model, think, max_retries, max_tool_c
                 if attempt < max_retries:
                     time.sleep(2 * attempt)
         if response is None:
+            stall_cycles += 1
+            # print(), not _vprint(): batches run --quiet, and a stalled provider is exactly
+            # what their log needs to show. flush=True -- stdout is a file, so block buffering
+            # would otherwise hide this for as long as the stall lasts.
+            print(f"  [ollama unreachable: gave up after {max_retries} retries "
+                  f"(stall cycle {stall_cycles}/{_MAX_STALL_CYCLES}); last error: {last_err}]",
+                  flush=True)
+            if stall_cycles >= _MAX_STALL_CYCLES:
+                raise RuntimeError(
+                    f"Ollama unreachable after {_MAX_STALL_CYCLES} stall cycles "
+                    f"({_MAX_STALL_CYCLES * max_retries} attempts); last error: {last_err}")
             # Surface the error to the model so it can adapt; keep the loop alive.
             msg = (f"The previous call failed with a connection error: {last_err}. "
                    f"Please proceed from the last step.")
-            _vprint(verbose, f"  [giving up after {max_retries} retries; asking model to continue]")
             messages.append({'role': 'user', 'content': msg})
             continue
 
+        stall_cycles = 0  # a successful call clears the stall counter
         messages.append(response.message)
         _vprint(verbose, '-' * 72)
         _vprint(verbose, "Thinking: ", getattr(response.message, 'thinking', None))
