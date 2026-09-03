@@ -228,7 +228,7 @@ def sub_cycle(substituents: list = e_withdraw, scoring_args: list = scoring_args
   print('=============================================================================')
   print(f"Starting sub cycle on base rings for method {scoring_args[1]}.")
 
-  best_score = 0.0
+  best_score = 100.0  # scoring_function's failure sentinel: any real (positive) gap beats it
   best_smiles = ''
   total_list = []
   for ring, locs in zip(base_rings, clean_ring_locations):
@@ -244,7 +244,7 @@ def sub_cycle(substituents: list = e_withdraw, scoring_args: list = scoring_args
               total_list.append((new_smiles, score))
           except:
               print(f"Error scoring {new_smiles}")
-              score = 0.0
+              score = 100.0
               total_list.append((new_smiles, 'scoring error, skipped'))
           print(f"{new_smiles}: {score}")
           if score < best_score:
@@ -260,7 +260,7 @@ def sub_cycle(substituents: list = e_withdraw, scoring_args: list = scoring_args
 
   return total_list
 
-def grow_cycle(best_smiles: str = 'c1ccccc1', best_score: float = 0.0, substituents: list[str] = e_withdraw):
+def grow_cycle(best_smiles: str = 'c1ccccc1', best_score: float = 100.0, substituents: list[str] = e_withdraw):
     '''
     add substituents to free carbons in the molecule. 
 
@@ -289,7 +289,7 @@ def grow_cycle(best_smiles: str = 'c1ccccc1', best_score: float = 0.0, substitue
                         total_list.append((new_smiles, score))
                     except:
                         print(f"Error scoring {new_smiles}")
-                        score = 0.0
+                        score = 100.0
                         total_list.append((new_smiles, 'scoring error, skipped'))
                     print(f"{new_smiles}: {score}")
                     if score < best_score:
@@ -303,7 +303,7 @@ def grow_cycle(best_smiles: str = 'c1ccccc1', best_score: float = 0.0, substitue
     print('=============================================================================')
     return total_list
 
-def replace_groups(orig_smiles: str = 'c1ccccc1', best_score: float = 0.0, substituents_to_replace: list[str] = e_withdraw, 
+def replace_groups(orig_smiles: str = 'c1ccccc1', best_score: float = 100.0, substituents_to_replace: list[str] = e_withdraw, 
                    new_substituents: list[str] = e_donate):
     '''
     replace existing substituents in the molecule with new ones. 
@@ -334,7 +334,7 @@ def replace_groups(orig_smiles: str = 'c1ccccc1', best_score: float = 0.0, subst
                         total_list.append((new_smiles, score))
                     except:
                         print(f"Error scoring {new_smiles}")
-                        score = 0.0
+                        score = 100.0
                         total_list.append((new_smiles, 'scoring error, skipped'))
                     #print(f"{new_smiles}: {score}")
                     if score < best_score:
@@ -487,7 +487,7 @@ def sub_cycle_batch(substituents: list = e_withdraw, scoring_args: list = scorin
     total_list = list(zip(intermediate_list, scores))
 
     # Find best score
-    best_score = 0.0
+    best_score = 100.0  # see sub_cycle: a positive-definite objective needs a high starting best
     best_smiles = ''
     for smiles, score in total_list:
         print(f"{smiles}: {score}")
@@ -501,7 +501,7 @@ def sub_cycle_batch(substituents: list = e_withdraw, scoring_args: list = scorin
 
     return total_list
 
-def grow_cycle_batch(best_smiles: str = 'c1ccccc1', best_score: float = 0.0, substituents: list = e_withdraw):
+def grow_cycle_batch(best_smiles: str = 'c1ccccc1', best_score: float = 100.0, substituents: list = e_withdraw):
     '''
     Batch version of grow_cycle. Add substituents to free carbons in the molecule.
     Generates all SMILES first, then scores them in batch.
@@ -554,7 +554,7 @@ def grow_cycle_batch(best_smiles: str = 'c1ccccc1', best_score: float = 0.0, sub
     
     return total_list
 
-def replace_groups_batch(orig_smiles: str = 'c1ccccc1', best_score: float = 0.0, 
+def replace_groups_batch(orig_smiles: str = 'c1ccccc1', best_score: float = 100.0, 
                          substituents_to_replace: list = e_withdraw, 
                          new_substituents: list = e_donate):
     '''
