@@ -13,6 +13,20 @@ import numpy as np
 if not hasattr(np, "in1d"):
     np.in1d = np.isin
 
+# The openbabel-wheel pip package dropped the OBElementTable class that ODDT 0.7
+# constructs in oddt/toolkits/ob.py (the element data is now exposed as plain
+# module-level functions with the same names). Patch a delegating shim in before
+# oddt is imported; oddt only ever calls GetVdwRad on it.
+try:
+    import openbabel.openbabel as _ob
+    if not hasattr(_ob, "OBElementTable"):
+        class OBElementTable:  # noqa: N801 - mirrors the OpenBabel class name
+            def __getattr__(self, name):
+                return getattr(_ob, name)
+        _ob.OBElementTable = OBElementTable
+except ImportError:
+    pass
+
 import oddt
 from oddt.interactions import (close_contacts,
                                hbonds,
