@@ -26,7 +26,7 @@ Adversary sets (each is one (proposer, adversary) pairing):
 
 For each set, runs --replicates sessions back-to-back. Gap scoring is CPU-bound so runs are
 strictly sequential (no parallelism). Each replicate gets its own --results-dir under
-results/hl_batches/<batch_id>/<set>/rep<N>/, so one run -> one .md + one .json sidecar.
+results/batches/hl_batches/<batch_id>/<set>/rep<N>/, so one run -> one .md + one .json sidecar.
 
 A manifest (manifest.json at the batch root) records every job; analyze_replicates.py reads it.
 
@@ -57,7 +57,9 @@ import subprocess
 _HERE = os.path.dirname(os.path.abspath(__file__))  # code/ -- the invoked scripts live here too
 _ROOT = os.path.dirname(_HERE)  # repo root -- where results/ lives
 _PY = sys.executable  # same interpreter (the activated venv's python)
-_DEFAULT_RESULTS_ROOT = os.path.join(_ROOT, 'results', 'hl_batches')
+# Inside the private fao_batches repo (results/batches is that repo's root), so
+# HL-gap run records land in version control with the docking batch results.
+_DEFAULT_RESULTS_ROOT = os.path.join(_ROOT, 'results', 'batches', 'hl_batches')
 
 # Adversary set definitions: label -> (script, argv template). Model names are substituted
 # from the CLI flags at build time so all sets share one --openai-model / --anthropic-model /
@@ -209,9 +211,9 @@ def main(argv=None) -> int:
                    help='Gemini model for the gemini_* sets (default: gemini-3-flash-preview).')
     p.add_argument('--batch-id', default=None,
                    help='Batch directory name (default: hl_<method>_<timestamp>). '
-                        'All output goes under results/hl_batches/<batch-id>/.')
+                        'All output goes under results/batches/hl_batches/<batch-id>/.')
     p.add_argument('--results-root', default=_DEFAULT_RESULTS_ROOT,
-                   help='Where batch dirs are written (default: results/hl_batches).')
+                   help='Where batch dirs are written (default: results/batches/hl_batches).')
     p.add_argument('--force', action='store_true',
                    help='Re-run every replicate, ignoring completed ones (does not delete old '
                         'artifacts; the manifest is updated to the newest run).')
