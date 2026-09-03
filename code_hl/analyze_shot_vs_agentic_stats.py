@@ -1,6 +1,6 @@
 """
 Statistical comparison of zero-shot / few-shot / frag-shot single-call baselines,
-the agentic 5x4 loop (6 proposers common to all four), and two non-LLM GA
+the agentic 5x4 loop (5 proposers common to all four), and two non-LLM GA
 baselines (results/batches/ga_baseline/5x4 and 5x4_full, 5 replicates each,
 no proposer identity).
 
@@ -19,7 +19,7 @@ reported but weren't designed for a fair chemical-space comparison.
 Unit-of-analysis discipline:
   - compound-level rows are NOT independent (multiple compounds share a replicate,
     multiple replicates share a proposer) -> naive compound-level tests pseudoreplicate.
-  - Primary tests use REPLICATE-level aggregates (n=6 proposers x ~5 reps per condition)
+  - Primary tests use REPLICATE-level aggregates (n=5 proposers x ~5 reps per condition)
     with proposer as a blocking/random-effect variable.
   - Compound-level tests are reported as a secondary/liberal lens only, explicitly
     flagged as pseudoreplicated.
@@ -72,12 +72,11 @@ AGENTIC = {
     "gemini":    f"{ROOT}/hl_gemini-3-flash-preview_vs_gemini_5x4/analysis/compounds_hl_gemini-3-flash-preview_vs_gemini_5x4.csv",
     "kimi":      f"{ROOT}/hl_kimi-k2.6_vs_kimi-k2.6_5x4/analysis/compounds_hl_kimi-k2.6_vs_kimi-k2.6_5x4.csv",
     "deepseek":  f"{ROOT}/hl_deepseek-v4-pro_vs_deepseek-v4-pro_5x4/analysis/compounds_hl_deepseek-v4-pro_vs_deepseek-v4-pro_5x4.csv",
-    "gemma4":    f"{ROOT}/hl_gemma4-31b_vs_gemma4_5x4/analysis/compounds_hl_gemma4-31b_vs_gemma4_5x4.csv",
 }
 
-# The HL arm has SIX agentic proposers (docking had five): gemma4 also ran a self-critique
-# 5x4 set here. All six exist in the baseline shots too, so the proposer-blocked tests
-# (Friedman, paired Wilcoxon, mixed model) use n=6 blocks rather than 5.
+# Five agentic proposers, matching the docking study. A gemma4 self-critique 5x4 set also
+# exists under results/batches/hl_batches/ but it was a test run, not part of the study --
+# deliberately excluded here and from every comparison table.
 # baseline set_label -> canonical proposer key, for the zero/few/frag files
 BASELINE_LABEL_MAP = {
     "openai": "openai",
@@ -85,7 +84,6 @@ BASELINE_LABEL_MAP = {
     "gemini": "gemini",
     "kimi-k2.6": "kimi",
     "deepseek-v4-pro": "deepseek",
-    "gemma4": "gemma4",
 }
 
 def load_baseline(condition):
@@ -180,7 +178,7 @@ def main():
         print(f"| {label} | {n1} | {n2} | {u:.1f} | {p_:.2e} | {adj:.2e} | {r:+.2f} |")
     print()
 
-    print("## 2. Design-matched test — Friedman (proposer as block, n=6 proposers)\n")
+    print("## 2. Design-matched test — Friedman (proposer as block, n=5 proposers)\n")
     print("Restricted to zero/frag/few/agentic -- the GA baselines have no proposer dimension "
           "(each is one system run 5 times, not 5 proposers each run once), so neither can be a block "
           "in a proposer-matched design and both are excluded from this test and §3's mixed model. "
@@ -190,14 +188,14 @@ def main():
           "is controlled for by construction.\n")
     conds4 = ["zero", "frag", "few", "agentic"]
     prop_means = rep.groupby(["proposer", "condition"], observed=True)["mean_gap"].mean().unstack("condition")
-    prop_means = prop_means.loc[["openai", "anthropic", "gemini", "kimi", "deepseek", "gemma4"], conds4]
+    prop_means = prop_means.loc[["openai", "anthropic", "gemini", "kimi", "deepseek"], conds4]
     print(prop_means.round(3).to_markdown())
     print()
     fr_stat, fr_p = stats.friedmanchisquare(*[prop_means[c].values for c in conds4])
-    print(f"Friedman chi2 = {fr_stat:.3f}, p = {fr_p:.4f} (df=3, n=6 blocks — likely underpowered; "
+    print(f"Friedman chi2 = {fr_stat:.3f}, p = {fr_p:.4f} (df=3, n=5 blocks — likely underpowered; "
           "treat as indicative, not confirmatory)\n")
 
-    print("### Paired Wilcoxon signed-rank, agentic vs each single-shot mode (n=6 proposers)\n")
+    print("### Paired Wilcoxon signed-rank, agentic vs each single-shot mode (n=5 proposers)\n")
     print("| Comparison | W | p (two-sided, exact) | median diff (single-shot − agentic) |")
     print("|---|---:|---:|---:|")
     for c in ["zero", "frag", "few"]:
