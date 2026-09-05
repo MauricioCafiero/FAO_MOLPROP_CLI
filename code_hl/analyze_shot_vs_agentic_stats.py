@@ -86,6 +86,20 @@ BASELINE_LABEL_MAP = {
     "deepseek-v4-pro": "deepseek",
 }
 
+# First-response baseline: each agentic batch's turn-1 compounds (proposer with
+# tools, no adversary, no iteration), mined from the sidecar transcripts by
+# code/make_first_response_baseline.py and re-scored with GFN2-xTB. set_label is
+# already the canonical proposer key, and the proposer dimension is intact
+# (5 proposers x 5 replicates), so unlike the GAs this condition joins the
+# proposer-BLOCKED tests (Friedman, paired Wilcoxon, mixed model).
+FIRST_RESPONSE = f"{ROOT}/first_response_5x4/analysis/compounds_first_response_5x4.csv"
+
+def load_first_response():
+    df = pd.read_csv(FIRST_RESPONSE)
+    df["proposer"] = df["set_label"]
+    df["condition"] = "first"
+    return df[["proposer", "condition", "replicate", "gap"]]
+
 def load_baseline(condition):
     df = pd.read_csv(SOURCES[condition])
     df = df[df["set_label"].isin(BASELINE_LABEL_MAP.keys())].copy()
@@ -117,14 +131,14 @@ def main():
     agentic = load_agentic()
     ga_frag10 = load_ga("ga_frag10")
     ga_full = load_ga("ga_full")
-    df = pd.concat([baseline, agentic, ga_frag10, ga_full], ignore_index=True)
+    df = pd.concat([baseline, agentic, ga_frag10, ga_full, load_first_response()], ignore_index=True)
     n_before = len(df)
     df = df[df["gap"].notna()].copy()
     if len(df) != n_before:
         print(f"(dropped {n_before - len(df)} compound row(s) with a failed gap calculation before analysis)\n")
     df["good_lead"] = df.apply(good_lead, axis=1).astype(int)
     df["condition"] = pd.Categorical(
-        df["condition"], categories=["zero", "frag", "few", "agentic", "ga_frag10", "ga_full"], ordered=True)
+        df["condition"], categories=["zero", "frag", "few", "first", "agentic", "ga_frag10", "ga_full"], ordered=True)
 
     # ---------- replicate-level aggregation ----------
     rep = df.groupby(["proposer", "condition", "replicate"], observed=True).agg(
@@ -138,9 +152,9 @@ def main():
     print(f"n replicates per condition (pooled over 5 proposers): "
           f"{rep.groupby('condition', observed=True).size().to_dict()}\n")
 
-    print("## 1. Primary test — replicate-level mean HOMO-LUMO gap, all 6 conditions pooled\n")
-    print("Kruskal-Wallis across all 6 conditions (unit = one replicate's mean gap, "
-          f"n={len(rep)} replicates; zero/frag/few/agentic pooled over 5 proposers, ga_frag10/ga_full "
+    print("## 1. Primary test — replicate-level mean HOMO-LUMO gap, all 7 conditions pooled\n")
+    print("Kruskal-Wallis across all 7 conditions (unit = one replicate's mean gap, "
+          f"n={len(rep)} replicates; zero/frag/few/first/agentic pooled over 5 proposers, ga_frag10/ga_full "
           "are each their own 5 replicates with no proposer dimension):\n")
     groups = [g["mean_gap"].values for _, g in rep.groupby("condition", observed=True)]
     h, p = stats.kruskal(*groups)
@@ -152,7 +166,7 @@ def main():
           "GA's chemical space wasn't matched to those specific conditions.\n")
     print("| Comparison | n1 | n2 | U | raw p | Holm-adj p | rank-biserial r (effect size) |")
     print("|---|---:|---:|---:|---:|---:|---:|")
-    conds = ["zero", "frag", "few", "agentic", "ga_frag10", "ga_full"]
+    conds = ["zero", "frag", "few", "first", "agentic", "ga_frag10", "ga_full"]
     pairs = list(itertools.combinations(conds, 2))
     raw_ps = []
     stats_cache = []
@@ -179,34 +193,36 @@ def main():
     print()
 
     print("## 2. Design-matched test — Friedman (proposer as block, n=5 proposers)\n")
-    print("Restricted to zero/frag/few/agentic -- the GA baselines have no proposer dimension "
+    print("Restricted to zero/frag/few/first/agentic -- the GA baselines have no proposer dimension "
           "(each is one system run 5 times, not 5 proposers each run once), so neither can be a block "
           "in a proposer-matched design and both are excluded from this test and §3's mixed model. "
-          "They're already covered by §1's pooled tests above.\n")
+          "They're already covered by §1's pooled tests above. first-response shares the agentic "
+          "proposers (its compounds are mined from the same transcripts' turn 1), so it joins the "
+          "blocked tests.\n")
     print("Uses each proposer's mean-of-replicate-means per condition, so proposer identity "
           "(the strongest confound: proposers differ far more than conditions within a proposer) "
           "is controlled for by construction.\n")
-    conds4 = ["zero", "frag", "few", "agentic"]
+    conds5 = ["zero", "frag", "few", "first", "agentic"]
     prop_means = rep.groupby(["proposer", "condition"], observed=True)["mean_gap"].mean().unstack("condition")
-    prop_means = prop_means.loc[["openai", "anthropic", "gemini", "kimi", "deepseek"], conds4]
+    prop_means = prop_means.loc[["openai", "anthropic", "gemini", "kimi", "deepseek"], conds5]
     print(prop_means.round(3).to_markdown())
     print()
-    fr_stat, fr_p = stats.friedmanchisquare(*[prop_means[c].values for c in conds4])
-    print(f"Friedman chi2 = {fr_stat:.3f}, p = {fr_p:.4f} (df=3, n=5 blocks — likely underpowered; "
+    fr_stat, fr_p = stats.friedmanchisquare(*[prop_means[c].values for c in conds5])
+    print(f"Friedman chi2 = {fr_stat:.3f}, p = {fr_p:.4f} (df=4, n=5 blocks — likely underpowered; "
           "treat as indicative, not confirmatory)\n")
 
-    print("### Paired Wilcoxon signed-rank, agentic vs each single-shot mode (n=5 proposers)\n")
-    print("| Comparison | W | p (two-sided, exact) | median diff (single-shot − agentic) |")
+    print("### Paired Wilcoxon signed-rank, agentic vs each other LLM condition (n=5 proposers)\n")
+    print("| Comparison | W | p (two-sided, exact) | median diff (other − agentic) |")
     print("|---|---:|---:|---:|")
-    for c in ["zero", "frag", "few"]:
+    for c in ["zero", "frag", "few", "first"]:
         d = prop_means[c] - prop_means["agentic"]
         w, p_ = stats.wilcoxon(d, alternative="two-sided", mode="exact")
         print(f"| {c} vs agentic | {w:.1f} | {p_:.4f} | {d.median():+.3f} |")
     print()
 
     print("## 3. Linear mixed-effects model — replicate-level, proposer as random intercept\n")
-    print("Restricted to zero/frag/few/agentic for the same reason as §2 (GA baselines have no "
-          "proposer to supply a random intercept for).\n")
+    print("Restricted to zero/frag/few/first/agentic for the same reason as §2 (GA baselines have no "
+          "proposer to supply a random intercept for; first-response shares the agentic proposers).\n")
     print("`mean_gap ~ C(condition, Treatment('agentic')) + (1 | proposer)`, "
           "unit = replicate. Coefficients are eV relative to agentic; a POSITIVE coefficient = "
           "that single-shot condition scored WORSE (larger gap) than agentic.\n")
@@ -225,7 +241,7 @@ def main():
     gee_df = df.copy()
     gee_df["cluster"] = gee_df["proposer"].astype(str) + "_" + gee_df["condition"].astype(str) + "_" + gee_df["replicate"].astype(str)
     gee_df["condition"] = pd.Categorical(
-        gee_df["condition"], categories=["agentic", "zero", "frag", "few", "ga_frag10", "ga_full"])
+        gee_df["condition"], categories=["agentic", "zero", "frag", "few", "first", "ga_frag10", "ga_full"])
     fam = Binomial()
     ind = Exchangeable()
     gee_model = GEE.from_formula("good_lead ~ C(condition, Treatment('agentic'))", groups="cluster", data=gee_df, family=fam, cov_struct=ind)
